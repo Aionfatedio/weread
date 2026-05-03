@@ -4,6 +4,8 @@
 html,
 body {
   height: 100%;
+  background-color: var(--front-bg-color-1);
+  color: var(--text-color-1);
 }
 
 a {

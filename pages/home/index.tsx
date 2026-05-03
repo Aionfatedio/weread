@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { type SVGProps, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { debounce } from 'ranuts/utils';
 import { BookCard } from '@/components/BookCard';
 import { addBook, getAllBooks, searchBooksByAuthor, searchBooksByContent, searchBooksByTitle } from '@/store/books';
 import { checkEncoding, createReader, trim } from '@/lib/transformText';
 import { resumeDB } from '@/store';
+import { startSpaViewTransition } from '@/lib/navigation';
 import { BOOKS_ADD_BY_DEFAULT, ensampleConfigs } from '@/lib/ensample';
 import type { EnBook } from '@/lib/ensample';
 import type { BookInfo, SearchResult } from '@/store/books';
@@ -12,33 +14,59 @@ import { DEVICE_ENUM, useCheckDevice } from '@/lib/hooks';
 import { Loading } from '@/components/Loading';
 import { t } from '@/locales';
 import 'ranui/input';
-import 'ranui/icon';
 
 const DESKTOP_INPUT_STYLE = {
   '--ran-input-border-radius': '2rem',
   '--ran-input-content-border-radius': '2rem',
-  '--ran-input-content-padding': '10px',
+  '--ran-input-content-padding': '10px 10px 10px 52px',
   '--ran-input-content-font-size': '16px',
   '--ran-input-content-font-weight': '400',
-  '--ran-icon-font-size': '24px',
-  '--ran-icon-color': 'var(--icon-color-1)',
-  '--ran-icon-margin': '4px 0px 0px 16px',
 };
 
-const DESKTOP_MORE_ICON_STYLE = {
-  '--ran-icon-font-size': '24px',
-  '--ran-icon-color': 'var(--icon-color-1)',
-};
+const HomeSearchIcon = (props: SVGProps<SVGSVGElement>): React.JSX.Element => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" {...props}>
+    <g fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <path d="m21 21l-4.34-4.34" />
+      <circle cx="11" cy="11" r="8" />
+    </g>
+  </svg>
+);
 
-const DESKTOP_PLUS_ICON_STYLE = {
-  '--ran-icon-font-size': '64px',
-  '--ran-icon-color': 'var(--icon-color-2)',
-  '--ran-icon-margin': '0px',
-};
+const HomePlusIcon = (props: SVGProps<SVGSVGElement>): React.JSX.Element => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" {...props}>
+    <path
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      d="M5 12h14m-7-7v14"
+    />
+  </svg>
+);
 
-const DESKTOP_ICON_STYLE = {
-  '--ran-icon-font-size': '120px',
-};
+const HomeArrowRightIcon = (props: SVGProps<SVGSVGElement>): React.JSX.Element => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" {...props}>
+    <path
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+      d="m9 18l6-6l-6-6"
+    />
+  </svg>
+);
+
+const HomeSearchEmptyIcon = (props: SVGProps<SVGSVGElement>): React.JSX.Element => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" {...props}>
+    <g fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
+      <path d="m13.5 8.5l-5 5m0-5l5 5" />
+      <circle cx="11" cy="11" r="8" />
+      <path d="m21 21l-4.3-4.3" />
+    </g>
+  </svg>
+);
 
 const addBookByFile = () => {
   return new Promise((resolve, reject) => {
@@ -100,6 +128,7 @@ export const Home = (): React.JSX.Element => {
 };
 
 export const DesktopHome = (): React.JSX.Element => {
+  const navigate = useNavigate();
   const [bookList, setBookList] = useState<BookInfo[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const [searchValue, setSearchValue] = useState<string>('');
@@ -190,17 +219,19 @@ export const DesktopHome = (): React.JSX.Element => {
     const target = e.target as HTMLDivElement;
     const id = target.getAttribute('item-id');
     if (id) {
-      window.location.href = `${ROUTE_PATH.BOOK_DETAIL}?id=${id}`;
+      startSpaViewTransition(() => {
+        navigate(`${ROUTE_PATH.BOOK_DETAIL}?id=${id}`);
+      });
     }
   };
 
   useEffect(() => {
     // 默认添加的书籍，只添加一次
-    if (!localStorage.getItem(BOOKS_ADD_BY_DEFAULT)) {
+    if (!window.localStorage.getItem(BOOKS_ADD_BY_DEFAULT)) {
       ensampleConfigs.forEach((config: EnBook) => {
         addFromUrl(config);
       });
-      localStorage.setItem(BOOKS_ADD_BY_DEFAULT, 'true');
+      window.localStorage.setItem(BOOKS_ADD_BY_DEFAULT, 'true');
     }
     // 查询所有书籍，进行展示
     getBooks();
@@ -217,13 +248,18 @@ export const DesktopHome = (): React.JSX.Element => {
     <div>
       <div className="w-full bg-front-bg-color-2">
         <div className="w-full min-h-72 pt-28">
-          <r-input
-            className="w-1/2 min-w-2xs h-14 block mx-auto"
-            icon="search"
-            style={DESKTOP_INPUT_STYLE}
-            placeholder={t('search')}
-            ref={inputRef}
-          ></r-input>
+          <div className="relative w-1/2 min-w-2xs h-14 block mx-auto">
+            <HomeSearchIcon
+              className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none z-10"
+              style={{ width: 24, height: 24, color: 'var(--icon-color-1)' }}
+            />
+            <r-input
+              className="w-full h-full block mx-auto"
+              style={DESKTOP_INPUT_STYLE}
+              placeholder={t('search')}
+              ref={inputRef}
+            ></r-input>
+          </div>
           <div
             className="w-full transition-all duration-500 overflow-hidden mt-6 pb-6"
             style={{ height: searchValue ? 'calc(100vh - var(--spacing) * 48)' : '0px' }}
@@ -326,7 +362,7 @@ export const DesktopHome = (): React.JSX.Element => {
                 !searchLoading && (
                   <div className="h-full">
                     <div className="flex flex-col items-center justify-center h-full">
-                      <r-icon name="without-content" className="text-text-color-2" style={DESKTOP_ICON_STYLE}></r-icon>
+                      <HomeSearchEmptyIcon className="text-text-color-2" style={{ width: 120, height: 120 }} />
                       <div className="text-text-color-2 font-normal text-xl">{t('no_result')}</div>
                     </div>
                   </div>
@@ -354,12 +390,18 @@ export const DesktopHome = (): React.JSX.Element => {
           <div className="max-w-7xl mx-auto pt-12 flex flex-row justify-between items-center">
             <div className="flex justify-start items-center">
               <div className="cursor-pointer text-text-color-1 text-2xl font-medium">{t('my_bookcase')}</div>
-              <r-icon className="-rotate-90 cursor-pointer" name="more" style={DESKTOP_MORE_ICON_STYLE}></r-icon>
+              <HomeArrowRightIcon
+                className="cursor-pointer"
+                style={{ width: 24, height: 24, color: 'var(--icon-color-1)' }}
+              />
             </div>
           </div>
           <div className="max-w-7xl mx-auto flex flex-row flex-wrap justify-start items-center">
             <div className="w-2xs h-40 bg-front-bg-color-3 p-5 cursor-pointer justify-center rounded-xl mr-6 items-center flex hover:scale-110 transition-all mt-5">
-              <r-icon name="plus" style={DESKTOP_PLUS_ICON_STYLE} onClick={add}></r-icon>
+              <HomePlusIcon
+                style={{ width: 64, height: 64, color: 'var(--icon-color-2)' }}
+                onClick={add}
+              />
             </div>
             {bookList.map((book) => (
               <BookCard book={book} key={book.id} />
@@ -374,20 +416,14 @@ export const DesktopHome = (): React.JSX.Element => {
 const MOBILE_INPUT_STYLE = {
   '--ran-input-border-radius': '2rem',
   '--ran-input-content-border-radius': '2rem',
-  '--ran-input-content-padding': '10px',
+  '--ran-input-content-padding': '10px 10px 10px 36px',
   '--ran-input-content-font-size': '16px',
   '--ran-input-content-font-weight': '400',
-  '--ran-icon-font-size': '16px',
   '--ran-input-padding': '0px 10px',
 };
 
-export const MOBILE_PLUS_ICON_STYLE = {
-  '--ran-icon-font-size': '54px',
-  '--ran-icon-color': 'var(--icon-color-2)',
-  '--ran-icon-margin': '0px',
-};
-
 export const MobileHome = (): React.JSX.Element => {
+  const navigate = useNavigate();
   const [bookList, setBookList] = useState<BookInfo[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const [searchValue, setSearchValue] = useState<string>('');
@@ -478,7 +514,9 @@ export const MobileHome = (): React.JSX.Element => {
     const target = e.target as HTMLDivElement;
     const id = target.getAttribute('item-id');
     if (id) {
-      window.location.href = `${ROUTE_PATH.BOOK_DETAIL}?id=${id}`;
+      startSpaViewTransition(() => {
+        navigate(`${ROUTE_PATH.BOOK_DETAIL}?id=${id}`);
+      });
     }
   };
 
@@ -486,17 +524,19 @@ export const MobileHome = (): React.JSX.Element => {
     const target = e.target as HTMLDivElement;
     const id = target.getAttribute('item-id');
     if (id) {
-      window.location.href = `${ROUTE_PATH.BOOK_DETAIL}?id=${id}`;
+      startSpaViewTransition(() => {
+        navigate(`${ROUTE_PATH.BOOK_DETAIL}?id=${id}`);
+      });
     }
   };
 
   useEffect(() => {
     // 默认添加的书籍，只添加一次
-    if (!localStorage.getItem(BOOKS_ADD_BY_DEFAULT)) {
+    if (!window.localStorage.getItem(BOOKS_ADD_BY_DEFAULT)) {
       ensampleConfigs.forEach((config: EnBook) => {
         addFromUrl(config);
       });
-      localStorage.setItem(BOOKS_ADD_BY_DEFAULT, 'true');
+      window.localStorage.setItem(BOOKS_ADD_BY_DEFAULT, 'true');
     }
     // 查询所有书籍，进行展示
     getBooks();
@@ -512,13 +552,18 @@ export const MobileHome = (): React.JSX.Element => {
   return (
     <div className="w-full min-h-svh bg-front-bg-color-2">
       <div className="p-5">
-        <r-input
-          className="w-full h-9 block mx-auto"
-          icon="search"
-          style={MOBILE_INPUT_STYLE}
-          placeholder={t('search')}
-          ref={inputRef}
-        ></r-input>
+        <div className="relative w-full h-9 block mx-auto">
+          <HomeSearchIcon
+            className="absolute left-5 top-1/2 -translate-y-1/2 pointer-events-none z-10"
+            style={{ width: 16, height: 16, color: 'var(--icon-color-1)' }}
+          />
+          <r-input
+            className="w-full h-full block mx-auto"
+            style={MOBILE_INPUT_STYLE}
+            placeholder={t('search')}
+            ref={inputRef}
+          ></r-input>
+        </div>
       </div>
       {searchValue && (
         <div
@@ -623,7 +668,7 @@ export const MobileHome = (): React.JSX.Element => {
               !searchLoading && (
                 <div className="h-full">
                   <div className="flex flex-col items-center justify-center h-full">
-                    <r-icon name="without-content" className="text-text-color-2" style={DESKTOP_ICON_STYLE}></r-icon>
+                    <HomeSearchEmptyIcon className="text-text-color-2" style={{ width: 120, height: 120 }} />
                     <div className="text-text-color-2 font-normal text-xl">{t('no_result')}</div>
                   </div>
                 </div>
@@ -649,7 +694,10 @@ export const MobileHome = (): React.JSX.Element => {
         <div className="px-5">
           <div className="flex flex-row flex-wrap justify-start items-center">
             <div className="w-24 h-36 bg-front-bg-color-3 p-5 cursor-pointer justify-center rounded-xl mr-6 items-center flex hover:scale-110 transition-all mt-5">
-              <r-icon name="plus" style={MOBILE_PLUS_ICON_STYLE} onClick={add}></r-icon>
+              <HomePlusIcon
+                style={{ width: 54, height: 54, color: 'var(--icon-color-2)' }}
+                onClick={add}
+              />
             </div>
             {bookList.map((book) => (
               <BookCard book={book} key={book.id} />

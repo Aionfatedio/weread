@@ -24,7 +24,7 @@ export const Popover = ({ children, overlay, placement, trigger }: PopoverProps)
     return () => {
       syncHook.off(EVENT_NAME.CLOSE_POPOVER, closePopover);
     };
-  }, []);
+  }, [closePopover]);
 
   if (!isClient) {
     return <div></div>;

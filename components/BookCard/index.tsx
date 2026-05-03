@@ -1,6 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { BookInfo } from '@/store/books';
-import { setCurrentBookDetail, setPageNum, setTextSyntaxTree } from '@/lib/subscribe';
+import {
+  createEmptyReaderSearchHighlight,
+  setCurrentBookDetail,
+  setPageNum,
+  setReaderNavigationTarget,
+  setReaderSearchHighlight,
+  setTextSyntaxTree,
+} from '@/lib/subscribe';
+import { createEmptyTextSyntaxTree } from '@/lib/transformText';
+import { startSpaViewTransition } from '@/lib/navigation';
 import { ROUTE_PATH } from '@/router';
 import './index.scss';
 
@@ -25,6 +35,26 @@ const useIsMobile = () => {
   return isMobile;
 };
 
+const clearReaderSignals = () => {
+  setPageNum(0);
+  setCurrentBookDetail(null);
+  setReaderNavigationTarget({ revision: 0 });
+  setReaderSearchHighlight(createEmptyReaderSearchHighlight());
+  setTextSyntaxTree(createEmptyTextSyntaxTree());
+};
+
+const navigateToDetail = (
+  navigate: ReturnType<typeof useNavigate>,
+  id: string | number | undefined,
+): void => {
+  if (id === undefined) return;
+  const target = `${ROUTE_PATH.BOOK_DETAIL}?id=${id}`;
+  startSpaViewTransition(() => {
+    clearReaderSignals();
+    navigate(target);
+  });
+};
+
 export const BookCard = ({ book }: BookCardProps): React.JSX.Element => {
   const isMobile = useIsMobile();
 
@@ -33,41 +63,15 @@ export const BookCard = ({ book }: BookCardProps): React.JSX.Element => {
 
 export const DesktopBookCard = ({ book }: BookCardProps): React.JSX.Element => {
   const { id, image, title = '', author = '' } = book || {};
-  const ref = useRef<HTMLAnchorElement>(null);
+  const navigate = useNavigate();
 
-  const clear = () => {
-    setPageNum(0);
-    setCurrentBookDetail({});
-    setTextSyntaxTree({
-      sequences: [],
-      totalPage: 0,
-      pageText: [],
-      pageTitleId: [],
-      titleIdTitle: [],
-      titleIdPage: {},
-    });
+  const toDetail = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    navigateToDetail(navigate, id);
   };
-
-  const toDetail = () => {
-    clear();
-    if (document.startViewTransition) {
-      ref.current?.style.setProperty('view-transition-name', `book-info-${id}`);
-      document.startViewTransition(() => {
-        ref.current?.style.setProperty('view-transition-name', '');
-        window.location.href = `${ROUTE_PATH.BOOK_DETAIL}?id=${id}`;
-      });
-    } else {
-      window.location.href = `${ROUTE_PATH.BOOK_DETAIL}?id=${id}`;
-    }
-  };
-
-  useEffect(() => {
-    ref.current?.style.setProperty('view-transition-name', `book-info-${id}`);
-  }, []);
 
   return (
     <a
-      ref={ref}
       onClick={toDetail}
       href={`/weread/book-detail?id=${id}`}
       style={{
@@ -86,41 +90,15 @@ export const DesktopBookCard = ({ book }: BookCardProps): React.JSX.Element => {
 
 export const MobileBookCard = ({ book }: BookCardProps): React.JSX.Element => {
   const { id, title = '', author = '' } = book || {};
-  const ref = useRef<HTMLAnchorElement>(null);
+  const navigate = useNavigate();
 
-  const clear = () => {
-    setPageNum(0);
-    setCurrentBookDetail({});
-    setTextSyntaxTree({
-      sequences: [],
-      totalPage: 0,
-      pageText: [],
-      pageTitleId: [],
-      titleIdTitle: [],
-      titleIdPage: {},
-    });
+  const toDetail = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    navigateToDetail(navigate, id);
   };
-
-  const toDetail = () => {
-    clear();
-    if (document.startViewTransition) {
-      ref.current?.style.setProperty('view-transition-name', `book-info-${id}`);
-      document.startViewTransition(() => {
-        ref.current?.style.setProperty('view-transition-name', '');
-        window.location.href = `${ROUTE_PATH.BOOK_DETAIL}?id=${id}`;
-      });
-    } else {
-      window.location.href = `${ROUTE_PATH.BOOK_DETAIL}?id=${id}`;
-    }
-  };
-
-  useEffect(() => {
-    ref.current?.style.setProperty('view-transition-name', `book-info-${id}`);
-  }, []);
 
   return (
     <a
-      ref={ref}
       onClick={toDetail}
       href={`/weread/book-detail?id=${id}`}
       style={{
