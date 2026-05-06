@@ -163,6 +163,47 @@ r-dropdown.ran-popover-dropdown {
   border-radius: 8px;
 }
 
+.reader-menu-scroll-area::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+  background: transparent;
+}
+
+.reader-menu-scroll-area::-webkit-scrollbar-button {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.reader-menu-scroll-area::-webkit-scrollbar-track,
+.reader-menu-scroll-area::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.reader-menu-scroll-area::-webkit-scrollbar-thumb {
+  min-height: 56px;
+  border: 4px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  background-clip: content-box;
+}
+
+.reader-popover-panel:hover .reader-menu-scroll-area::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.18);
+}
+
+.reader-popover-panel:hover .reader-menu-scroll-area::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.26);
+}
+
+:root[theme='dark'] .reader-popover-panel:hover .reader-menu-scroll-area::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
+:root[theme='dark'] .reader-popover-panel:hover .reader-menu-scroll-area::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.24);
+}
+
 .reader-menu-search-wrapper {
   position: relative;
   height: 40px;

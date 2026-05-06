@@ -25,11 +25,7 @@ const fingerprintToString = (f: ChapterLayoutFingerprint): string => {
   return `${f.fontFamily}|${f.fontSize}|${f.pageWidth}|${f.pageHeight}|${f.pageGap}|${f.paragraphGap}|${f.lineHeight}`;
 };
 
-const buildCacheKey = (
-  bookId: string,
-  titleId: number,
-  fingerprint: ChapterLayoutFingerprint,
-): string => {
+const buildCacheKey = (bookId: string, titleId: number, fingerprint: ChapterLayoutFingerprint): string => {
   return `${bookId}|${titleId}|${fingerprintToString(fingerprint)}`;
 };
 
@@ -39,7 +35,13 @@ export const getCachedChapterPagination = (
   fingerprint: ChapterLayoutFingerprint,
 ): ChapterPagination | undefined => {
   if (!bookId) return undefined;
-  return cache.get(buildCacheKey(bookId, titleId, fingerprint));
+  const key = buildCacheKey(bookId, titleId, fingerprint);
+  const value = cache.get(key);
+  if (value === undefined) return undefined;
+  // Refresh recency: re-insert to move the entry to the end.
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
 };
 
 export const setCachedChapterPagination = (
@@ -49,19 +51,22 @@ export const setCachedChapterPagination = (
   pagination: ChapterPagination,
 ): void => {
   if (!bookId) return;
-  if (cache.size >= CACHE_LIMIT) {
+  const key = buildCacheKey(bookId, titleId, fingerprint);
+  if (cache.has(key)) {
+    cache.delete(key);
+  } else if (cache.size >= CACHE_LIMIT) {
     const oldestKey = cache.keys().next().value;
     if (oldestKey !== undefined) cache.delete(oldestKey);
   }
-  cache.set(buildCacheKey(bookId, titleId, fingerprint), pagination);
+  cache.set(key, pagination);
 };
 
-export const clearChapterPaginationCache = (bookId?: string): void => {
+export const clearChapterPaginationCache = (bookId?: string, titleId?: number): void => {
   if (!bookId) {
     cache.clear();
     return;
   }
-  const prefix = `${bookId}|`;
+  const prefix = titleId === undefined ? `${bookId}|` : `${bookId}|${titleId}|`;
   for (const key of Array.from(cache.keys())) {
     if (key.startsWith(prefix)) cache.delete(key);
   }
@@ -80,6 +85,10 @@ export const estimateChapterPageCount = (
 
   let blockBudget = 0;
   for (const block of blocks) {
+    if (block.type === 'image') {
+      blockBudget += usableHeight + paragraphGap;
+      continue;
+    }
     const lines = Math.max(1, Math.ceil(Math.max(block.text.length, 1) / charsPerLine));
     blockBudget += lines * lineHeight + paragraphGap;
   }
@@ -109,10 +118,7 @@ const measureElementPageRange = (
   return { start: Math.min(...pages), end: Math.max(...pages) };
 };
 
-export const measureChapterPagination = (
-  flow: HTMLElement,
-  pageStep: number,
-): ChapterPagination | null => {
+export const measureChapterPagination = (flow: HTMLElement, pageStep: number): ChapterPagination | null => {
   if (pageStep <= 0) return null;
   const scrollWidth = flow.scrollWidth;
   if (scrollWidth <= 0) return null;

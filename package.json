@@ -25,7 +25,6 @@
     "@tailwindcss/oxide-darwin-arm64": "^4.1.17",
     "@tailwindcss/postcss": "^4.1.17",
     "@tailwindcss/vite": "^4.1.17",
-    "@types/crypto-js": "^4.2.2",
     "@types/node": "^25.0.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
@@ -51,7 +50,7 @@
   },
   "dependencies": {
     "@khmyznikov/pwa-install": "^0.6.0",
-    "crypto-js": "^4.2.0",
+    "flexsearch": "^0.8.212",
     "jschardet": "^3.1.4",
     "lit": "^3.3.1",
     "ranui": "0.1.10-alpha-27",

@@ -481,7 +481,7 @@ export const BookDetailMenu = (): React.JSX.Element => {
       {!showSearchResult ? (
         <Catalogue />
       ) : (
-        <div className="pb-7 overflow-y-auto flex-auto" ref={searchResultRef}>
+        <div className="reader-menu-scroll-area pb-7 overflow-y-auto flex-auto" ref={searchResultRef}>
           {searchResult.length > 0 ? (
             searchResult.map((item) => {
               const { text = [], index, title } = item;

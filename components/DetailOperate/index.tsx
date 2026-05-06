@@ -11,11 +11,7 @@ import {
   setReaderNavigationTarget,
   syncHook,
 } from '@/lib/subscribe';
-import {
-  type ReaderAnnotation,
-  getAnnotationBlock,
-  getReaderAnnotations,
-} from '@/lib/readerAnnotations';
+import { type ReaderAnnotation, getAnnotationBlock, getReaderAnnotations } from '@/lib/readerAnnotations';
 import {
   DEFAULT_READER_FONT,
   DEFAULT_READER_FONT_SIZE,
@@ -137,7 +133,13 @@ const FONT_NAME_IDS = new Set([1, 4, 16]);
 
 const getFontLabel = (font: BrowserLocalFont): string => {
   const labels = [font.fullName, font.family, font.postscriptName].filter(Boolean) as string[];
-  return labels.find((label) => CHINESE_CHAR_PATTERN.test(label)) || font.family || font.fullName || font.postscriptName || '';
+  return (
+    labels.find((label) => CHINESE_CHAR_PATTERN.test(label)) ||
+    font.family ||
+    font.fullName ||
+    font.postscriptName ||
+    ''
+  );
 };
 
 const getFontSearchText = (font: BrowserLocalFont | ReaderFontSetting): string => {
@@ -186,7 +188,11 @@ const decodeFontName = (view: DataView, offset: number, length: number, platform
   }
 };
 
-const getTableRecord = (view: DataView, sfntOffset: number, tableName: string): { offset: number; length: number } | undefined => {
+const getTableRecord = (
+  view: DataView,
+  sfntOffset: number,
+  tableName: string,
+): { offset: number; length: number } | undefined => {
   if (sfntOffset + 12 > view.byteLength) return undefined;
 
   const tableCount = view.getUint16(sfntOffset + 4, false);
@@ -387,9 +393,7 @@ const ReaderSpacingControl = ({ readingMode }: ReaderSpacingControlProps): React
   const defaultValue = isPaged ? DEFAULT_READER_PAGE_GAP_RATIO : DEFAULT_READER_SCROLL_PADDING_X;
   const value = isPaged ? pageGapRatio : scrollPaddingX;
   const title = isPaged ? '页间距' : '页外距';
-  const formatLabel = isPaged
-    ? (v: number) => `${Math.round(v * 100)}%`
-    : (v: number) => `${Math.round(v)}px`;
+  const formatLabel = isPaged ? (v: number) => `${Math.round(v * 100)}%` : (v: number) => `${Math.round(v)}px`;
 
   const flushPendingApply = useCallback(() => {
     if (applyTimerRef.current) {
@@ -690,7 +694,9 @@ const ReaderFontControlPanel = (): React.JSX.Element => {
       saveReaderFontSize(normalizedFontSize);
     }
     const nextSystemFonts =
-      storedFont.source === 'system' ? mergeReaderFonts(readerSessionSystemFonts, [storedFont]) : readerSessionSystemFonts;
+      storedFont.source === 'system'
+        ? mergeReaderFonts(readerSessionSystemFonts, [storedFont])
+        : readerSessionSystemFonts;
     readerSessionSystemFonts = nextSystemFonts;
     setSystemFonts(nextSystemFonts);
   }, []);
@@ -968,12 +974,7 @@ const ReaderFontControlPanel = (): React.JSX.Element => {
           <div className="reader-font-panel-title">字体</div>
           <div className="reader-font-action-area">
             {fontAccessMessage && <span className="reader-font-access-message">{fontAccessMessage}</span>}
-            <button
-              ref={accessButtonRef}
-              className="reader-font-access-button"
-              disabled={isLoadingFonts}
-              type="button"
-            >
+            <button ref={accessButtonRef} className="reader-font-access-button" disabled={isLoadingFonts} type="button">
               {isLoadingFonts ? '获取中...' : '获取系统字体'}
             </button>
           </div>
@@ -1167,9 +1168,7 @@ const ReaderNotePanel = (): React.JSX.Element => {
       const block = getAnnotationBlock(textSyntaxTree, annotation);
       const titleId = annotation.titleId ?? block?.titleId ?? 0;
       const page =
-        textSyntaxTree.blockIdPage[annotation.blockId] ??
-        textSyntaxTree.titleIdPage[titleId] ??
-        getPageNum();
+        textSyntaxTree.blockIdPage[annotation.blockId] ?? textSyntaxTree.titleIdPage[titleId] ?? getPageNum();
 
       setReaderNavigationTarget({
         blockId: annotation.blockId,
@@ -1193,7 +1192,9 @@ const ReaderNotePanel = (): React.JSX.Element => {
       lines.push(group.title);
       group.items.forEach((annotation) => {
         if (annotation.type === 'note' && annotation.noteText) {
-          lines.push(`◆ ${formatReaderNoteCopyDate(annotation.createdAt)}发表想法 ${annotation.noteText} 原文：${annotation.text}`);
+          lines.push(
+            `◆ ${formatReaderNoteCopyDate(annotation.createdAt)}发表想法 ${annotation.noteText} 原文：${annotation.text}`,
+          );
           return;
         }
         lines.push(`◆ ${getAnnotationPanelLabel(annotation)}`);
@@ -1242,42 +1243,42 @@ const ReaderNotePanel = (): React.JSX.Element => {
     <>
       {copyToast}
       <div className="reader-note-panel-wrapper">
-      <div className="reader-note-panel-title">笔记</div>
-      {annotations.length === 0 ? (
-        <div className="reader-note-panel-empty">暂无笔记</div>
-      ) : (
-        <div className="reader-note-panel-list">
-          {groups.map((group) => (
-            <div className="reader-note-panel-group" key={group.titleId}>
-              <div className="reader-note-panel-group-title">{group.title}</div>
-              {group.items.map((annotation) => (
-                <button
-                  className="reader-note-panel-item"
-                  key={annotation.id}
-                  type="button"
-                  onClick={() => jumpToAnnotation(annotation)}
-                >
-                  <span className="reader-note-panel-type-icon">{getAnnotationTypeIcon(annotation)}</span>
-                  <span className="reader-note-panel-item-content">
-                    <span className="reader-note-panel-item-text">{getAnnotationPanelLabel(annotation)}</span>
-                    {annotation.type === 'note' && annotation.noteText ? (
-                      <span className="reader-note-panel-item-quote">{annotation.text}</span>
-                    ) : null}
-                  </span>
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-      <button
-        className="reader-note-panel-copy"
-        disabled={annotations.length === 0}
-        type="button"
-        onClick={copyAllNotes}
-      >
-        复制全部笔记 · {annotations.length}
-      </button>
+        <div className="reader-note-panel-title">笔记</div>
+        {annotations.length === 0 ? (
+          <div className="reader-note-panel-empty">暂无笔记</div>
+        ) : (
+          <div className="reader-note-panel-list">
+            {groups.map((group) => (
+              <div className="reader-note-panel-group" key={group.titleId}>
+                <div className="reader-note-panel-group-title">{group.title}</div>
+                {group.items.map((annotation) => (
+                  <button
+                    className="reader-note-panel-item"
+                    key={annotation.id}
+                    type="button"
+                    onClick={() => jumpToAnnotation(annotation)}
+                  >
+                    <span className="reader-note-panel-type-icon">{getAnnotationTypeIcon(annotation)}</span>
+                    <span className="reader-note-panel-item-content">
+                      <span className="reader-note-panel-item-text">{getAnnotationPanelLabel(annotation)}</span>
+                      {annotation.type === 'note' && annotation.noteText ? (
+                        <span className="reader-note-panel-item-quote">{annotation.text}</span>
+                      ) : null}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
+        <button
+          className="reader-note-panel-copy"
+          disabled={annotations.length === 0}
+          type="button"
+          onClick={copyAllNotes}
+        >
+          复制全部笔记 · {annotations.length}
+        </button>
       </div>
     </>
   );
@@ -1460,22 +1461,28 @@ export const BookDetailOperate = (): React.JSX.Element => {
     }, PANEL_MOTION_DURATION);
   }, [clearPanelCloseTimer]);
 
-  const openPanel = useCallback((panel: ReaderControlPanelType) => {
-    clearPanelCloseTimer();
-    setRenderedPanel(panel);
-    setPanelMotion(activePanel ? 'switch' : 'enter');
-    setPanelMotionId((prev) => prev + 1);
-    setActivePanel(panel);
-  }, [activePanel, clearPanelCloseTimer]);
+  const openPanel = useCallback(
+    (panel: ReaderControlPanelType) => {
+      clearPanelCloseTimer();
+      setRenderedPanel(panel);
+      setPanelMotion(activePanel ? 'switch' : 'enter');
+      setPanelMotionId((prev) => prev + 1);
+      setActivePanel(panel);
+    },
+    [activePanel, clearPanelCloseTimer],
+  );
 
-  const togglePanel = useCallback((panel: ReaderControlPanelType) => {
-    if (activePanel === panel) {
-      closePanel();
-      return;
-    }
+  const togglePanel = useCallback(
+    (panel: ReaderControlPanelType) => {
+      if (activePanel === panel) {
+        closePanel();
+        return;
+      }
 
-    openPanel(panel);
-  }, [activePanel, closePanel, openPanel]);
+      openPanel(panel);
+    },
+    [activePanel, closePanel, openPanel],
+  );
 
   const getPanelAnchorElement = (panel: ReaderControlPanelType | null): HTMLElement | null => {
     if (panel === 'menu') return menuButtonRef.current;

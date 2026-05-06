@@ -1,9 +1,9 @@
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { type NavigateFunction, useNavigate } from 'react-router-dom';
 import { debounce, getQuery } from 'ranuts/utils';
 import { getBookById } from '@/store/books';
-import { transformTextToExpectedFormat } from '@/lib/transformText';
+import { readerDocumentToTextSyntaxTree } from '@/lib/readerDocument';
 import type { BookInfo } from '@/store/books';
 import type { ReaderBlock, TextSyntaxTree } from '@/lib/transformText';
 import { ROUTE_PATH } from '@/router';
@@ -53,6 +53,8 @@ import {
   updateReaderAnnotation,
 } from '@/lib/readerAnnotations';
 import { findKeywordSentenceMatches } from '@/lib/searchText';
+import { useResolvedBookImage } from '@/lib/useResolvedBookImage';
+import { releaseBookResourceUrls } from '@/lib/bookResources';
 import {
   createReaderLocator,
   createReaderScrollLocator,
@@ -64,6 +66,7 @@ import type { ReaderLocator } from '@/lib/readerProgress';
 import {
   type ChapterLayoutFingerprint,
   type ChapterPagination,
+  clearChapterPaginationCache,
   estimateChapterPageCount,
   getCachedChapterPagination,
   measureChapterPagination,
@@ -79,7 +82,14 @@ const MOBILE_ICON_STYLE = {
 };
 
 const ReaderPagePreviousIcon = (): React.JSX.Element => (
-  <svg className="reader-page-nav-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+  <svg
+    className="reader-page-nav-icon"
+    xmlns="http://www.w3.org/2000/svg"
+    width="12"
+    height="12"
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+  >
     <path
       fill="none"
       stroke="currentColor"
@@ -92,7 +102,14 @@ const ReaderPagePreviousIcon = (): React.JSX.Element => (
 );
 
 const ReaderPageNextIcon = (): React.JSX.Element => (
-  <svg className="reader-page-nav-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
+  <svg
+    className="reader-page-nav-icon"
+    xmlns="http://www.w3.org/2000/svg"
+    width="12"
+    height="12"
+    viewBox="0 0 24 24"
+    aria-hidden="true"
+  >
     <path
       fill="none"
       stroke="currentColor"
@@ -139,10 +156,7 @@ const getSelectionContainerNode = (node: Node | null): Node | null => {
 const isSelectionInContainer = (selection: Selection, container: HTMLElement): boolean => {
   const anchorNode = getSelectionContainerNode(selection.anchorNode);
   const focusNode = getSelectionContainerNode(selection.focusNode);
-  return Boolean(
-    (anchorNode && container.contains(anchorNode)) ||
-      (focusNode && container.contains(focusNode)),
-  );
+  return Boolean((anchorNode && container.contains(anchorNode)) || (focusNode && container.contains(focusNode)));
 };
 
 const DEFAULT_READER_FONT_SIZE = 18;
@@ -160,11 +174,7 @@ const getSelectionFallbackFontSize = (range: Range, container: HTMLElement): num
   return resolveFontSize(target, DEFAULT_READER_FONT_SIZE);
 };
 
-const getBlockFontSize = (
-  block: HTMLElement,
-  cache: Map<HTMLElement, number>,
-  fallback: number,
-): number => {
+const getBlockFontSize = (block: HTMLElement, cache: Map<HTMLElement, number>, fallback: number): number => {
   const cached = cache.get(block);
   if (cached !== undefined) return cached;
   const resolved = resolveFontSize(block, fallback);
@@ -202,7 +212,9 @@ const getRectProbeElement = (rect: ClientRectLike, container: HTMLElement): Elem
 };
 
 const getSelectionClipRect = (container: HTMLElement): DOMRect => {
-  return container.closest<HTMLElement>('.reader-page-window')?.getBoundingClientRect() ?? container.getBoundingClientRect();
+  return (
+    container.closest<HTMLElement>('.reader-page-window')?.getBoundingClientRect() ?? container.getBoundingClientRect()
+  );
 };
 
 interface CaretPoint {
@@ -212,10 +224,7 @@ interface CaretPoint {
 
 const getCaretAtPoint = (x: number, y: number): CaretPoint | null => {
   const doc = document as Document & {
-    caretPositionFromPoint?: (
-      x: number,
-      y: number,
-    ) => { offsetNode: Node; offset: number } | null;
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
     caretRangeFromPoint?: (x: number, y: number) => Range | null;
   };
   if (typeof doc.caretPositionFromPoint === 'function') {
@@ -229,12 +238,7 @@ const getCaretAtPoint = (x: number, y: number): CaretPoint | null => {
   return null;
 };
 
-const buildOrderedRange = (
-  anchorNode: Node,
-  anchorOffset: number,
-  focusNode: Node,
-  focusOffset: number,
-): Range => {
+const buildOrderedRange = (anchorNode: Node, anchorOffset: number, focusNode: Node, focusOffset: number): Range => {
   const anchorProbe = document.createRange();
   anchorProbe.setStart(anchorNode, anchorOffset);
   anchorProbe.setEnd(anchorNode, anchorOffset);
@@ -317,7 +321,9 @@ const rangeIntersectsBlockElement = (range: Range, blockElement: HTMLElement): b
 };
 
 const getSelectionDrafts = (range: Range, container: HTMLElement): ReaderAnnotationDraft[] => {
-  const blockElements = Array.from(container.querySelectorAll<HTMLElement>('.reader-content-block[data-reader-block-id]'));
+  const blockElements = Array.from(
+    container.querySelectorAll<HTMLElement>('.reader-content-block[data-reader-block-id]'),
+  );
   const drafts: ReaderAnnotationDraft[] = [];
 
   blockElements.forEach((blockElement) => {
@@ -327,7 +333,9 @@ const getSelectionDrafts = (range: Range, container: HTMLElement): ReaderAnnotat
     const startsInBlock = blockElement.contains(range.startContainer);
     const endsInBlock = blockElement.contains(range.endContainer);
     const startOffset = startsInBlock ? getTextOffsetInBlock(blockElement, range.startContainer, range.startOffset) : 0;
-    const endOffset = endsInBlock ? getTextOffsetInBlock(blockElement, range.endContainer, range.endOffset) : blockText.length;
+    const endOffset = endsInBlock
+      ? getTextOffsetInBlock(blockElement, range.endContainer, range.endOffset)
+      : blockText.length;
     const start = Math.min(Math.max(startOffset, 0), blockText.length);
     const end = Math.min(Math.max(endOffset, 0), blockText.length);
     if (start === end) return;
@@ -387,7 +395,11 @@ const getReaderMenuTopBoundary = (): number => {
 };
 
 const getReaderSelectionMenuTopHeight = (hasColorPicker = false): number => {
-  return READER_SELECTION_MENU_HEIGHT + (hasColorPicker ? READER_SELECTION_COLOR_PICKER_HEIGHT : 0) + READER_SELECTION_MENU_GAP;
+  return (
+    READER_SELECTION_MENU_HEIGHT +
+    (hasColorPicker ? READER_SELECTION_COLOR_PICKER_HEIGHT : 0) +
+    READER_SELECTION_MENU_GAP
+  );
 };
 
 const getReaderSelectionMenuPlacement = (top: number, hasColorPicker = false): 'bottom' | 'top' => {
@@ -585,26 +597,29 @@ const useReaderSelectionOverlay = (
     renderRange(selection.getRangeAt(0));
   }, [clearOverlay, containerRef, renderRange]);
 
-  const updateFromPointer = useCallback((showMenu = false): Range | null => {
-    const state = pointerRef.current;
-    const container = containerRef.current;
-    if (!state || !container) return null;
+  const updateFromPointer = useCallback(
+    (showMenu = false): Range | null => {
+      const state = pointerRef.current;
+      const container = containerRef.current;
+      if (!state || !container) return null;
 
-    const caret = getCaretAtPoint(state.lastClientX, state.lastClientY);
-    let focusNode = state.focusNode;
-    let focusOffset = state.focusOffset;
-    if (caret && container.contains(caret.node)) {
-      focusNode = caret.node;
-      focusOffset = caret.offset;
-      state.focusNode = focusNode;
-      state.focusOffset = focusOffset;
-    }
+      const caret = getCaretAtPoint(state.lastClientX, state.lastClientY);
+      let focusNode = state.focusNode;
+      let focusOffset = state.focusOffset;
+      if (caret && container.contains(caret.node)) {
+        focusNode = caret.node;
+        focusOffset = caret.offset;
+        state.focusNode = focusNode;
+        state.focusOffset = focusOffset;
+      }
 
-    const range = buildOrderedRange(state.anchorNode, state.anchorOffset, focusNode, focusOffset);
+      const range = buildOrderedRange(state.anchorNode, state.anchorOffset, focusNode, focusOffset);
 
-    renderRange(range, { showMenu });
-    return range;
-  }, [containerRef, renderRange]);
+      renderRange(range, { showMenu });
+      return range;
+    },
+    [containerRef, renderRange],
+  );
 
   const scheduleSelectionUpdate = useCallback(() => {
     if (Date.now() < suppressSelectionUpdateUntilRef.current) return;
@@ -1028,7 +1043,8 @@ const ReaderSelectionMenu = ({
   const showColorPicker = Boolean(activeStyleType);
   const showClearFormat = currentState.hasFormat || appliedAnnotationIds.length > 0;
   const placement =
-    currentState.placement === 'top' && currentState.top - getReaderSelectionMenuTopHeight(showColorPicker) < getReaderMenuTopBoundary()
+    currentState.placement === 'top' &&
+    currentState.top - getReaderSelectionMenuTopHeight(showColorPicker) < getReaderMenuTopBoundary()
       ? 'bottom'
       : currentState.placement;
   const note = currentState.noteAnnotation;
@@ -1042,7 +1058,9 @@ const ReaderSelectionMenu = ({
           onPointerDown={keepSelection}
         >
           <div className="reader-selection-note-card-bg">
-            <div className="reader-selection-note-card-time">{formatAnnotationTime(note.updatedAt || note.createdAt)}</div>
+            <div className="reader-selection-note-card-time">
+              {formatAnnotationTime(note.updatedAt || note.createdAt)}
+            </div>
             <div className="reader-selection-note-card-content">{note.noteText}</div>
             <div className="reader-selection-note-card-actions">
               <button className="reader-selection-note-card-delete" type="button" onClick={deleteNote}>
@@ -1060,66 +1078,66 @@ const ReaderSelectionMenu = ({
         onMouseDown={keepSelection}
         onPointerDown={keepSelection}
       >
-      {showColorPicker ? (
-        <div className="reader-selection-color-container">
-          {READER_ANNOTATION_COLORS.map((color) => (
-            <button
-              aria-label={`选择颜色 ${color}`}
-              className="reader-selection-color-item"
-              key={color}
-              style={{ background: color }}
-              type="button"
-              onClick={selectColor(color)}
-            >
+        {showColorPicker ? (
+          <div className="reader-selection-color-container">
+            {READER_ANNOTATION_COLORS.map((color) => (
+              <button
+                aria-label={`选择颜色 ${color}`}
+                className="reader-selection-color-item"
+                key={color}
+                style={{ background: color }}
+                type="button"
+                onClick={selectColor(color)}
+              >
                 {activeStyleType && selectedColors[activeStyleType] === color ? (
                   <span className="reader-selection-color-selected"></span>
                 ) : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <button className="reader-selection-menu-item" type="button" onClick={onCopy}>
-        <SelectionCopyIcon />
-        <span>复制</span>
-      </button>
-      <button
-        className={`reader-selection-menu-item ${activeStyleType === 'marker' ? 'is-selected' : ''}`}
-        type="button"
-        onClick={applyAnnotation('marker')}
-      >
-        <SelectionMarkerIcon />
-        <span>马克笔</span>
-      </button>
-      <button
-        className={`reader-selection-menu-item ${activeStyleType === 'wave' ? 'is-selected' : ''}`}
-        type="button"
-        onClick={applyAnnotation('wave')}
-      >
-        <SelectionWavyIcon />
-        <span>波浪线</span>
-      </button>
-      <button
-        className={`reader-selection-menu-item ${activeStyleType === 'underline' ? 'is-selected' : ''}`}
-        type="button"
-        onClick={applyAnnotation('underline')}
-      >
-        <SelectionUnderlineIcon />
-        <span>直线</span>
-      </button>
-      <button className="reader-selection-menu-item second-item" type="button" onClick={openNote}>
-        <SelectionNoteIcon />
-        <span>写想法</span>
-      </button>
-      <button className="reader-selection-menu-item second-item" type="button" onClick={searchSelection}>
-        <SelectionSearchIcon />
-        <span>查询</span>
-      </button>
-      {showClearFormat && (
-        <button className="reader-selection-menu-item second-item" type="button" onClick={deleteAnnotation}>
-          <SelectionClearFormatIcon />
-          <span>清除格式</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <button className="reader-selection-menu-item" type="button" onClick={onCopy}>
+          <SelectionCopyIcon />
+          <span>复制</span>
         </button>
-      )}
+        <button
+          className={`reader-selection-menu-item ${activeStyleType === 'marker' ? 'is-selected' : ''}`}
+          type="button"
+          onClick={applyAnnotation('marker')}
+        >
+          <SelectionMarkerIcon />
+          <span>马克笔</span>
+        </button>
+        <button
+          className={`reader-selection-menu-item ${activeStyleType === 'wave' ? 'is-selected' : ''}`}
+          type="button"
+          onClick={applyAnnotation('wave')}
+        >
+          <SelectionWavyIcon />
+          <span>波浪线</span>
+        </button>
+        <button
+          className={`reader-selection-menu-item ${activeStyleType === 'underline' ? 'is-selected' : ''}`}
+          type="button"
+          onClick={applyAnnotation('underline')}
+        >
+          <SelectionUnderlineIcon />
+          <span>直线</span>
+        </button>
+        <button className="reader-selection-menu-item second-item" type="button" onClick={openNote}>
+          <SelectionNoteIcon />
+          <span>写想法</span>
+        </button>
+        <button className="reader-selection-menu-item second-item" type="button" onClick={searchSelection}>
+          <SelectionSearchIcon />
+          <span>查询</span>
+        </button>
+        {showClearFormat && (
+          <button className="reader-selection-menu-item second-item" type="button" onClick={deleteAnnotation}>
+            <SelectionClearFormatIcon />
+            <span>清除格式</span>
+          </button>
+        )}
       </div>
     </>
   );
@@ -1179,7 +1197,10 @@ const ReaderNoteModal = ({ state, onCancel, onSave }: ReaderNoteModalProps): Rea
   const trimmedValue = value.trim();
 
   return (
-    <div className={`reader-note-modal-layer ${isClosing ? 'is-closing' : ''}`} onMouseDown={(e) => e.stopPropagation()}>
+    <div
+      className={`reader-note-modal-layer ${isClosing ? 'is-closing' : ''}`}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       <div className="reader-note-modal">
         <button className="reader-note-modal-close" aria-label="关闭" type="button" onClick={onCancel}>
           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">
@@ -1346,6 +1367,17 @@ const buildPageTitleId = (pageCount: number, titleIdPage: Record<string, number>
   });
 };
 
+const areChapterImagesReadyForPagination = (flow: HTMLElement, expectedImageCount: number): boolean => {
+  if (expectedImageCount <= 0) return true;
+  const images = Array.from(flow.querySelectorAll<HTMLImageElement>('.reader-content-image img'));
+  if (images.length < expectedImageCount) return false;
+  return images.every(
+    (image) =>
+      image.complete &&
+      (image.naturalWidth > 0 || image.naturalHeight > 0 || image.dataset.readerImageSettled === 'true'),
+  );
+};
+
 const renderHighlightedText = (text: string, keyword: string): React.ReactNode => {
   if (!keyword) return text;
 
@@ -1428,10 +1460,14 @@ const getBlockAnnotationSegments = (text: string, annotations: ReaderAnnotation[
     const end = sortedPoints[i + 1];
     if (start === end) continue;
     const styleAnnotation = normalizedAnnotations
-      .filter((annotation) => annotation.type !== 'note' && annotation.startOffset < end && annotation.endOffset > start)
+      .filter(
+        (annotation) => annotation.type !== 'note' && annotation.startOffset < end && annotation.endOffset > start,
+      )
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
     const noteAnnotation = normalizedAnnotations
-      .filter((annotation) => annotation.type === 'note' && annotation.startOffset < end && annotation.endOffset > start)
+      .filter(
+        (annotation) => annotation.type === 'note' && annotation.startOffset < end && annotation.endOffset > start,
+      )
       .sort((a, b) => b.updatedAt - a.updatedAt)[0];
     segments.push({ end, noteAnnotation, start, styleAnnotation });
   }
@@ -1477,9 +1513,10 @@ const renderTextWithAnnotations = (
 
   return getBlockAnnotationSegments(text, annotations).map((segment, index) => {
     const segmentText = text.slice(segment.start, segment.end);
-    const content = shouldHighlight && segmentText.includes(searchKeyword)
-      ? renderHighlightedText(segmentText, searchKeyword)
-      : segmentText;
+    const content =
+      shouldHighlight && segmentText.includes(searchKeyword)
+        ? renderHighlightedText(segmentText, searchKeyword)
+        : segmentText;
     if (!hasAnnotationSegment(segment)) return <span key={`plain-${segment.start}-${index}`}>{content}</span>;
 
     const primaryAnnotation = getPrimaryAnnotation(segment);
@@ -1500,18 +1537,79 @@ const renderTextWithAnnotations = (
   });
 };
 
+const ReaderImageBlock = ({
+  block,
+  bookId,
+  onImageSettled,
+}: {
+  block: ReaderBlock;
+  bookId?: string;
+  onImageSettled?: (blockId: string) => void;
+}): React.JSX.Element => {
+  const resolvedSrc = useResolvedBookImage(bookId, block.src);
+  const imageRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    if (!onImageSettled || !resolvedSrc) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      if (imageRef.current?.complete) {
+        onImageSettled(block.id);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [block.id, onImageSettled, resolvedSrc]);
+
+  const handleImageSettled = useCallback(
+    (event?: React.SyntheticEvent<HTMLImageElement>) => {
+      if (event?.currentTarget) {
+        event.currentTarget.dataset.readerImageSettled = 'true';
+      }
+      onImageSettled?.(block.id);
+    },
+    [block.id, onImageSettled],
+  );
+
+  return (
+    <figure
+      className="reader-content-block reader-content-image"
+      data-reader-block-id={block.id}
+      data-reader-title-id={block.titleId}
+      key={block.id}
+    >
+      {resolvedSrc && (
+        <img
+          alt={block.alt || ''}
+          ref={imageRef}
+          src={resolvedSrc}
+          onError={handleImageSettled}
+          onLoad={handleImageSettled}
+        />
+      )}
+    </figure>
+  );
+};
+
 const renderReaderBlock = (
   block: ReaderBlock,
   {
     annotations = [],
+    bookId,
+    onImageSettled,
     searchKeyword,
     shouldHighlight,
   }: {
     annotations?: ReaderAnnotation[];
+    bookId?: string;
+    onImageSettled?: (blockId: string) => void;
     searchKeyword: string;
     shouldHighlight: boolean;
   },
 ): React.ReactNode => {
+  if (block.type === 'image') {
+    return <ReaderImageBlock block={block} bookId={bookId} key={block.id} onImageSettled={onImageSettled} />;
+  }
+
   const content = renderTextWithAnnotations(block.text, annotations, searchKeyword, shouldHighlight);
 
   if (block.type === 'heading') {
@@ -1641,7 +1739,7 @@ const createScrollTargetLocator = ({
     startPage === undefined
       ? block.titleId === undefined
         ? 0
-        : textSyntaxTree.titleIdPage[block.titleId] ?? 0
+        : (textSyntaxTree.titleIdPage[block.titleId] ?? 0)
       : startPage + Math.round(safeRatio * Math.max((endPage ?? startPage) - startPage, 0));
   const page = Math.min(Math.max(rawPage, 0), Math.max(textSyntaxTree.totalPage || 0, 0));
   const blockLength = Math.max(block.end - block.start, 1);
@@ -1702,7 +1800,14 @@ const useReaderAnnotationActions = ({
 
       if (selectionMenuState.styleAnnotation) {
         selectionMenuState.drafts.forEach((draft) => {
-          const annotation = saveReaderAnnotation(bookId, draft, type, nextColor, undefined, selectionMenuState.styleAnnotation?.id);
+          const annotation = saveReaderAnnotation(
+            bookId,
+            draft,
+            type,
+            nextColor,
+            undefined,
+            selectionMenuState.styleAnnotation?.id,
+          );
           if (annotation) appliedAnnotations.push(annotation);
         });
       } else {
@@ -1716,14 +1821,17 @@ const useReaderAnnotationActions = ({
     [annotationColors, bookId, selectionMenuState],
   );
 
-  const handleDeleteAnnotation = useCallback((annotationIds?: string[]) => {
-    if (bookId && annotationIds?.length) {
-      deleteReaderAnnotations(bookId, annotationIds);
-    } else if (bookId && selectionMenuState?.styleAnnotation) {
-      deleteReaderAnnotation(bookId, selectionMenuState.styleAnnotation.id);
-    }
-    clearSelection();
-  }, [bookId, clearSelection, selectionMenuState?.styleAnnotation]);
+  const handleDeleteAnnotation = useCallback(
+    (annotationIds?: string[]) => {
+      if (bookId && annotationIds?.length) {
+        deleteReaderAnnotations(bookId, annotationIds);
+      } else if (bookId && selectionMenuState?.styleAnnotation) {
+        deleteReaderAnnotation(bookId, selectionMenuState.styleAnnotation.id);
+      }
+      clearSelection();
+    },
+    [bookId, clearSelection, selectionMenuState?.styleAnnotation],
+  );
 
   const handleDeleteNote = useCallback(() => {
     if (bookId && selectionMenuState?.noteAnnotation) {
@@ -1880,29 +1988,47 @@ const ReaderScrollContent = ({
     };
   }, []);
 
-  const saveScrollLocator = useCallback(() => {
-    if (!bookId) return;
-    const locator = createReaderScrollLocator({
-      bookId,
-      contentElement: contentRef.current,
-      textSyntaxTree,
-    });
-    if (locator) {
-      saveReaderProgress(locator);
-    }
-  }, [bookId, textSyntaxTree]);
+  const saveScrollLocator = useCallback(
+    (anchorY?: number) => {
+      if (!bookId) return;
+      const locator = createReaderScrollLocator({
+        anchorY,
+        bookId,
+        contentElement: contentRef.current,
+        textSyntaxTree,
+      });
+      if (locator) {
+        saveReaderProgress(locator);
+      }
+    },
+    [bookId, textSyntaxTree],
+  );
 
-  const restoreScrollBlock = useCallback((blockId: string, ratio: number, align: 'anchor' | 'center', onRestored?: () => void) => {
-    window.requestAnimationFrame(() => {
-      const targetElement = contentRef.current?.querySelector<HTMLElement>(`[data-reader-block-id="${blockId}"]`);
-      if (!targetElement) return;
-      const rect = targetElement.getBoundingClientRect();
-      const targetAnchorY = align === 'center' ? window.innerHeight / 2 : getScrollRestoreAnchorY();
-      const targetTop = Math.max(window.scrollY + rect.top + rect.height * Math.min(Math.max(ratio, 0), 1) - targetAnchorY, 0);
-      window.scrollTo({ behavior: 'auto', top: targetTop });
-      onRestored?.();
-    });
-  }, []);
+  const saveScrollDefaultLocator = useCallback(() => {
+    saveScrollLocator();
+  }, [saveScrollLocator]);
+
+  const saveScrollCenterLocator = useCallback(() => {
+    saveScrollLocator(window.innerHeight / 2);
+  }, [saveScrollLocator]);
+
+  const restoreScrollBlock = useCallback(
+    (blockId: string, ratio: number, align: 'anchor' | 'center', onRestored?: () => void) => {
+      window.requestAnimationFrame(() => {
+        const targetElement = contentRef.current?.querySelector<HTMLElement>(`[data-reader-block-id="${blockId}"]`);
+        if (!targetElement) return;
+        const rect = targetElement.getBoundingClientRect();
+        const targetAnchorY = align === 'center' ? window.innerHeight / 2 : getScrollRestoreAnchorY();
+        const targetTop = Math.max(
+          window.scrollY + rect.top + rect.height * Math.min(Math.max(ratio, 0), 1) - targetAnchorY,
+          0,
+        );
+        window.scrollTo({ behavior: 'auto', top: targetTop });
+        onRestored?.();
+      });
+    },
+    [],
+  );
 
   const saveScrollTargetLocator = useCallback(
     (blockId: string, ratio: number) => {
@@ -1966,28 +2092,34 @@ const ReaderScrollContent = ({
 
     window.addEventListener('scroll', scheduleSave, { passive: true });
     window.addEventListener('resize', scheduleSave);
-    window.addEventListener('pagehide', saveScrollLocator);
+    window.addEventListener('pagehide', saveScrollDefaultLocator);
     return () => {
       if (timer) {
         window.clearTimeout(timer);
       }
-      saveScrollLocator();
       window.removeEventListener('scroll', scheduleSave);
       window.removeEventListener('resize', scheduleSave);
-      window.removeEventListener('pagehide', saveScrollLocator);
+      window.removeEventListener('pagehide', saveScrollDefaultLocator);
     };
-  }, [bookId, saveScrollLocator]);
+  }, [bookId, saveScrollDefaultLocator, saveScrollLocator]);
+
+  useLayoutEffect(() => {
+    return () => {
+      saveScrollCenterLocator();
+    };
+  }, [saveScrollCenterLocator]);
 
   const renderedBlocks = useMemo(
     () =>
       blocks.map((block) =>
         renderReaderBlock(block, {
           annotations: annotationsByBlockId.get(block.id) || [],
+          bookId,
           searchKeyword,
           shouldHighlight: Boolean(searchKeyword) && block.text.includes(searchKeyword),
         }),
       ),
-    [annotationsByBlockId, blocks, readerSearchHighlight.revision, searchKeyword],
+    [annotationsByBlockId, blocks, bookId, readerSearchHighlight.revision, searchKeyword],
   );
 
   return (
@@ -2066,6 +2198,7 @@ const ReaderPagedContent = ({
   const pendingLocatorRef = useRef<ReaderLocator | null>(null);
   const visiblePagesRef = useRef(visiblePages);
   const measureFrameRef = useRef<number | null>(null);
+  const contentMeasureFrameRef = useRef<number | null>(null);
   const settledMeasureTimerRef = useRef<number | null>(null);
   const copyToastTimerRef = useRef<number | null>(null);
   const [layout, setLayout] = useState<ReaderLayout>({ pageWidth: 0, pageGap: 0, pageStep: 0, pageHeight: 0 });
@@ -2073,6 +2206,7 @@ const ReaderPagedContent = ({
     buildChapterLayoutFingerprint({ pageWidth: 0, pageGap: 0, pageStep: 0, pageHeight: 0 }),
   );
   const [chapterPaginations, setChapterPaginations] = useState<Map<number, ChapterPagination>>(() => new Map());
+  const [contentMeasureRevision, setContentMeasureRevision] = useState(0);
   const [copyToastVisible, setCopyToastVisible] = useState(false);
 
   const blocks = textSyntaxTree.blocks;
@@ -2162,9 +2296,7 @@ const ReaderPagedContent = ({
       const tid = titleIdSequence[i];
       const start = chapterStartPages[tid] ?? 0;
       const nextStart =
-        i + 1 < titleIdSequence.length
-          ? chapterStartPages[titleIdSequence[i + 1]] ?? totalPage + 1
-          : totalPage + 1;
+        i + 1 < titleIdSequence.length ? (chapterStartPages[titleIdSequence[i + 1]] ?? totalPage + 1) : totalPage + 1;
       if (pageNum >= start && pageNum < nextStart) {
         return { currentTitleId: tid, currentLocalPage: Math.max(0, pageNum - start) };
       }
@@ -2180,9 +2312,12 @@ const ReaderPagedContent = ({
     if (currentTitleId === undefined) return [] as ReaderBlock[];
     return getChapterBlocks(textSyntaxTree, currentTitleId);
   }, [textSyntaxTree, currentTitleId]);
+  const currentChapterImageCount = useMemo(
+    () => currentChapterBlocks.filter((block) => block.type === 'image').length,
+    [currentChapterBlocks],
+  );
 
-  const currentChapterPagination =
-    currentTitleId !== undefined ? chapterPaginations.get(currentTitleId) : undefined;
+  const currentChapterPagination = currentTitleId !== undefined ? chapterPaginations.get(currentTitleId) : undefined;
   const safeLocalPage = currentChapterPagination
     ? Math.min(Math.max(0, currentLocalPage), Math.max(0, currentChapterPagination.chapterPageCount - 1))
     : Math.max(0, currentLocalPage);
@@ -2221,6 +2356,7 @@ const ReaderPagedContent = ({
 
     flow.style.setProperty('--reader-page-width', `${pageWidth}px`);
     flow.style.setProperty('--reader-page-gap', `${pageGap}px`);
+    flow.style.setProperty('--reader-page-height', `${viewportHeight}px`);
     flow.style.width = `${pageWidth}px`;
 
     setLayout((prev) => {
@@ -2272,6 +2408,26 @@ const ReaderPagedContent = ({
     [rememberCurrentLocator, runMeasureLayout],
   );
 
+  const scheduleContentPaginationMeasure = useCallback(() => {
+    if (currentTitleId === undefined) return;
+    clearChapterPaginationCache(bookId, currentTitleId);
+    setChapterPaginations((prev) => {
+      if (!prev.has(currentTitleId)) return prev;
+      const next = new Map(prev);
+      next.delete(currentTitleId);
+      return next;
+    });
+
+    if (contentMeasureFrameRef.current !== null) {
+      window.cancelAnimationFrame(contentMeasureFrameRef.current);
+    }
+    contentMeasureFrameRef.current = window.requestAnimationFrame(() => {
+      contentMeasureFrameRef.current = null;
+      setContentMeasureRevision((revision) => revision + 1);
+      scheduleMeasureLayout({ includeSettledPass: true });
+    });
+  }, [bookId, currentTitleId, scheduleMeasureLayout]);
+
   const fingerprintRef = useRef(fingerprint);
 
   // 章节级测量：currentTitleId / fingerprint / layout.pageStep / 当前章 blocks 变化时
@@ -2285,6 +2441,20 @@ const ReaderPagedContent = ({
     const fingerprintChanged = !chapterFingerprintEqual(fingerprintRef.current, fingerprint);
     if (fingerprintChanged) {
       fingerprintRef.current = fingerprint;
+    }
+
+    if (!areChapterImagesReadyForPagination(flow, currentChapterImageCount)) {
+      clearChapterPaginationCache(bookId, currentTitleId);
+      setChapterPaginations((prev) => {
+        const current = prev.get(currentTitleId);
+        if (!current || current.chapterPageCount > 1 || currentChapterImageCount <= 1) {
+          return fingerprintChanged ? (prev.size === 0 ? prev : new Map()) : prev;
+        }
+        const next = fingerprintChanged ? new Map<number, ChapterPagination>() : new Map(prev);
+        next.delete(currentTitleId);
+        return next;
+      });
+      return;
     }
 
     const cached = getCachedChapterPagination(bookId, currentTitleId, fingerprint);
@@ -2311,7 +2481,15 @@ const ReaderPagedContent = ({
       base.set(currentTitleId, result);
       return base;
     });
-  }, [bookId, currentTitleId, layout.pageStep, fingerprint, currentChapterBlocks]);
+  }, [
+    bookId,
+    currentTitleId,
+    layout.pageStep,
+    fingerprint,
+    currentChapterBlocks,
+    contentMeasureRevision,
+    currentChapterImageCount,
+  ]);
 
   // 同步章节级分页结果到 textSyntaxTree（消费侧依赖）
   useEffect(() => {
@@ -2409,15 +2587,7 @@ const ReaderPagedContent = ({
         }),
       );
     }
-  }, [
-    bookId,
-    blocks,
-    blocksByTitleId,
-    chapterPaginations,
-    chapterStartPages,
-    currentTitleId,
-    titleIdSequence,
-  ]);
+  }, [bookId, blocks, blocksByTitleId, chapterPaginations, chapterStartPages, currentTitleId, titleIdSequence]);
 
   // 初次进入：取存储的 locator 进入 pendingLocator
   useLayoutEffect(() => {
@@ -2432,9 +2602,7 @@ const ReaderPagedContent = ({
     if (navigationRevisionRef.current === navigationTarget.revision) return;
     navigationRevisionRef.current = navigationTarget.revision;
     if (!navigationTarget.blockId && navigationTarget.titleId === undefined) return;
-    const block = navigationTarget.blockId
-      ? blocks.find((b) => b.id === navigationTarget.blockId)
-      : undefined;
+    const block = navigationTarget.blockId ? blocks.find((b) => b.id === navigationTarget.blockId) : undefined;
     const ratio =
       block && typeof navigationTarget.matchStart === 'number' && Number.isFinite(navigationTarget.matchStart)
         ? Math.min(Math.max(navigationTarget.matchStart / Math.max(block.text.length, 1), 0), 1)
@@ -2505,6 +2673,9 @@ const ReaderPagedContent = ({
       if (measureFrameRef.current !== null) {
         window.cancelAnimationFrame(measureFrameRef.current);
       }
+      if (contentMeasureFrameRef.current !== null) {
+        window.cancelAnimationFrame(contentMeasureFrameRef.current);
+      }
       if (settledMeasureTimerRef.current !== null) {
         window.clearTimeout(settledMeasureTimerRef.current);
       }
@@ -2550,6 +2721,7 @@ const ReaderPagedContent = ({
     return {
       '--reader-page-width': `${pageWidth}px`,
       '--reader-page-gap': `${layout.pageGap}px`,
+      '--reader-page-height': `${layout.pageHeight}px`,
       transform:
         layout.pageStep > 0 ? `translate3d(-${safeLocalPage * layout.pageStep}px, 0, 0)` : 'translate3d(0, 0, 0)',
       width: `${pageWidth}px`,
@@ -2563,11 +2735,20 @@ const ReaderPagedContent = ({
       currentChapterBlocks.map((block) =>
         renderReaderBlock(block, {
           annotations: annotationsByBlockId.get(block.id) || [],
+          bookId,
+          onImageSettled: scheduleContentPaginationMeasure,
           searchKeyword,
           shouldHighlight: Boolean(searchKeyword) && block.text.includes(searchKeyword),
         }),
       ),
-    [annotationsByBlockId, currentChapterBlocks, readerSearchHighlight.revision, searchKeyword],
+    [
+      annotationsByBlockId,
+      bookId,
+      currentChapterBlocks,
+      readerSearchHighlight.revision,
+      scheduleContentPaginationMeasure,
+      searchKeyword,
+    ],
   );
 
   return (
@@ -2618,6 +2799,31 @@ const next = (num: number = 1) => {
   });
 };
 
+const loadBookDetailById = (id: string | undefined, navigate: NavigateFunction): void => {
+  if (!id) return;
+  getBookById<BookInfo>(id)
+    .then((res) => {
+      if (res.error) {
+        resumeDB().then(() => {
+          loadBookDetailById(id, navigate);
+        });
+        return;
+      }
+
+      if (!res.data?.document) {
+        navigate(ROUTE_PATH.HOME, { replace: true });
+        return;
+      }
+
+      setCurrentBookDetail(res.data);
+      setTextSyntaxTree(readerDocumentToTextSyntaxTree(res.data.document));
+    })
+    .catch((error) => {
+      console.log('error', error);
+      navigate(ROUTE_PATH.HOME, { replace: true });
+    });
+};
+
 export const BookDetail = (): React.JSX.Element => {
   const [currentDevice] = useCheckDevice();
   const { id } = getQuery();
@@ -2626,6 +2832,10 @@ export const BookDetail = (): React.JSX.Element => {
   useEffect(() => {
     return () => {
       clearBookDetailMenuSearchState(bookId);
+      // Revoke any object URLs created while reading this book so the browser
+      // can reclaim image memory after navigating away. Resources are still
+      // persisted in IndexedDB and will be re-resolved on the next visit.
+      releaseBookResourceUrls(bookId);
     };
   }, [bookId]);
 
@@ -2685,36 +2895,12 @@ export const DesktopBookDetail = (): React.JSX.Element => {
     }
   };
 
-  const getBookDetailById = (id?: string) => {
-    if (!id) return;
-    getBookById<BookInfo>(id)
-      .then((res) => {
-        if (res.error) {
-          resumeDB().then(() => {
-            getBookDetailById(id);
-          });
-        } else {
-          setCurrentBookDetail(res.data);
-          const { content, title } = res.data;
-          const textSyntaxTree: TextSyntaxTree = transformTextToExpectedFormat({
-            content,
-            title,
-          });
-          setTextSyntaxTree(textSyntaxTree);
-        }
-      })
-      .catch((error) => {
-        console.log('error', error);
-        navigate(ROUTE_PATH.HOME, { replace: true });
-      });
-  };
-
   useEffect(() => {
     const { id } = getQuery();
     if (id) {
-      getBookDetailById(id);
+      loadBookDetailById(id, navigate);
     }
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     syncHook.tap(EVENT_NAME.SET_CURRENT_BOOK_DETAIL, updateUI);
@@ -2798,7 +2984,8 @@ export const DesktopBookDetail = (): React.JSX.Element => {
   const hasKnownPagedTotalPage = textSyntaxTree.totalPage > 0 || textSyntaxTree.pageTitleId.length > 0;
   const isFirstPagedPage = pageNum <= 0;
   const isLastPagedPage =
-    hasKnownPagedTotalPage && pageNum >= Math.max(0, textSyntaxTree.totalPage - (getVisiblePageCount(DEVICE_ENUM.DESKTOP) - 1));
+    hasKnownPagedTotalPage &&
+    pageNum >= Math.max(0, textSyntaxTree.totalPage - (getVisiblePageCount(DEVICE_ENUM.DESKTOP) - 1));
   const scrollProgressLocator = getReaderProgress(id || undefined);
   const scrollNavigationBlock = readerNavigationTarget.blockId
     ? textSyntaxTree.blocks.find((item) => item.id === readerNavigationTarget.blockId)
@@ -2806,8 +2993,7 @@ export const DesktopBookDetail = (): React.JSX.Element => {
   const scrollNavigationTitleId = isValidTitleId(textSyntaxTree, readerNavigationTarget.titleId)
     ? readerNavigationTarget.titleId
     : scrollNavigationBlock?.titleId;
-  const hasActiveScrollNavigation =
-    readerNavigationTarget.revision > 0 && scrollNavigationTitleId === scrollTitleId;
+  const hasActiveScrollNavigation = readerNavigationTarget.revision > 0 && scrollNavigationTitleId === scrollTitleId;
   const scrollTargetBlockId = hasActiveScrollNavigation ? readerNavigationTarget.blockId : undefined;
   const scrollTargetBlockRatio =
     hasActiveScrollNavigation &&
@@ -2973,30 +3159,6 @@ export const MobileBookDetail = (): React.JSX.Element => {
     });
   }, []);
 
-  const getBookDetailById = (id?: string) => {
-    if (!id) return;
-    getBookById<BookInfo>(id)
-      .then((res) => {
-        if (res.error) {
-          resumeDB().then(() => {
-            getBookDetailById(id);
-          });
-        } else {
-          setCurrentBookDetail(res.data);
-          const { content, title } = res.data;
-          const textSyntaxTree: TextSyntaxTree = transformTextToExpectedFormat({
-            content,
-            title,
-          });
-          setTextSyntaxTree(textSyntaxTree);
-        }
-      })
-      .catch((error) => {
-        console.log('error', error);
-        navigate(ROUTE_PATH.HOME, { replace: true });
-      });
-  };
-
   const touchStart = (e: React.TouchEvent<HTMLDivElement>) => {
     e.stopPropagation();
     const { touches } = e;
@@ -3042,9 +3204,9 @@ export const MobileBookDetail = (): React.JSX.Element => {
   useEffect(() => {
     const { id } = getQuery();
     if (id) {
-      getBookDetailById(id);
+      loadBookDetailById(id, navigate);
     }
-  }, []);
+  }, [navigate]);
 
   useEffect(() => {
     syncHook.tap(EVENT_NAME.SET_CURRENT_BOOK_DETAIL, updateUI);

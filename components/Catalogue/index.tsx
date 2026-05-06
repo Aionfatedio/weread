@@ -14,6 +14,7 @@ import {
 import { SORT_DIRECTION } from '@/lib/enums';
 import { getReaderProgress } from '@/lib/readerProgress';
 import { getStoredReaderReadingMode } from '@/lib/readerSettings';
+import { useResolvedBookImage } from '@/lib/useResolvedBookImage';
 
 const SORT_ICON_STYLE = {
   '--ran-icon-font-size': '20px',
@@ -68,6 +69,7 @@ export const Catalogue = (): React.JSX.Element => {
   const bookDetail: BookInfo | null = getCurrentBookDetail();
   const textSyntaxTree: TextSyntaxTree = getTextSyntaxTree();
   const [currentTitleId, setCurrentTitleId] = useState(() => getCurrentTitleId(bookDetail?.id, textSyntaxTree));
+  const resolvedCover = useResolvedBookImage(bookDetail?.id, bookDetail?.image);
 
   const toSort = useCallback(() => {
     const next = sortDirection === SORT_DIRECTION.DOWN ? SORT_DIRECTION.UP : SORT_DIRECTION.DOWN;
@@ -110,7 +112,7 @@ export const Catalogue = (): React.JSX.Element => {
       scrollRef.current?.removeEventListener('click', toPage);
       sortRef.current?.removeEventListener('click', toSort);
     };
-  }, [sortDirection]);
+  }, [toSort]);
 
   useEffect(() => {
     updateCurrentTitleId();
@@ -142,7 +144,7 @@ export const Catalogue = (): React.JSX.Element => {
   return (
     <>
       <div className="px-7 py-2 flex flex-row flex-nowrap items-center shrink-0">
-        {bookDetail?.image && <img className="w-14 mr-5" src={bookDetail.image} />}
+        {resolvedCover && <img className="w-14 mr-5" src={resolvedCover} alt={bookDetail?.title} />}
         <div>
           <div className="text-lg text-text-color-1 font-medium break-all">{bookDetail?.title}</div>
           <div className="text-sm text-text-color-2 font-medium mt-1 break-all">{bookDetail?.author}</div>
@@ -150,12 +152,16 @@ export const Catalogue = (): React.JSX.Element => {
       </div>
       <div className="mx-9 basis-10 flex items-center justify-end shrink-0" ref={sortRef}>
         <r-icon
-          className={`cursor-pointer hover-icon rotate-180 ${sortDirection}`}
+          className={`cursor-pointer hover-icon ${sortDirection}`}
           name="sort"
-          style={SORT_ICON_STYLE}
+          style={{
+            ...SORT_ICON_STYLE,
+            transform: sortDirection === SORT_DIRECTION.DOWN ? 'rotate(180deg)' : 'rotate(0deg)',
+            transition: 'transform 180ms ease',
+          }}
         ></r-icon>
       </div>
-      <div className="overflow-y-auto flex-auto" ref={scrollRef}>
+      <div className="reader-menu-scroll-area overflow-y-auto flex-auto" ref={scrollRef}>
         {textSyntaxTree?.sequences?.map((item) => {
           const isCurrentTitle = item.titleId === currentTitleId;
           return (

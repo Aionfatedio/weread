@@ -45,7 +45,7 @@ Weread is a minimalist, privacy-focused web reader that provides a clean reading
 
 ## ✨ Features
 
-- 📂 **Local First** - Import TXT books directly from your device
+- 📂 **Local First** - Import TXT and EPUB books directly from your device
 - 🔒 **Zero Commitment** - No accounts, no signups, no strings attached
 - 🔐 **Privacy by Default** - No analytics, no telemetry, no data collection
 - 🚫 **No Server** - Zero backend dependencies (pure client-side)
@@ -60,7 +60,7 @@ Weread is a minimalist, privacy-focused web reader that provides a clean reading
 ## 🛠️ Tech Stack
 
 - **Frontend Framework**: React 19 + TypeScript
-- **Build Tool**: Vite 6
+- **Build Tool**: Vite 7
 - **Styling**: Tailwind CSS 4 + SCSS
 - **State Management**: Custom store with IndexedDB
 - **Routing**: React Router DOM
@@ -112,7 +112,7 @@ pnpm preview
 
 ## 📱 Usage
 
-1. **Add Books**: Click the "+" button to import TXT files from your device
+1. **Add Books**: Click the "+" button to import TXT or EPUB files from your device
 2. **Read**: Click on any book to start reading
 3. **Navigate**: Use arrow keys or swipe gestures to turn pages
 4. **Search**: Use the search bar to find books by title, author, or content

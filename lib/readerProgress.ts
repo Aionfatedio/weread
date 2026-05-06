@@ -62,7 +62,11 @@ const getBlockTextQuote = (block: ReaderBlock | undefined): Pick<ReaderLocator, 
   };
 };
 
-const getBlockGlobalProgress = (block: ReaderBlock | undefined, textSyntaxTree: TextSyntaxTree, ratio: number): number => {
+const getBlockGlobalProgress = (
+  block: ReaderBlock | undefined,
+  textSyntaxTree: TextSyntaxTree,
+  ratio: number,
+): number => {
   if (!block || textSyntaxTree.rawText.length <= 0) return 0;
   const blockLength = Math.max(block.end - block.start, 1);
   return clampRatio((block.start + blockLength * clampRatio(ratio)) / textSyntaxTree.rawText.length);
@@ -174,8 +178,8 @@ export const createReaderLocator = ({
 }): ReaderLocator => {
   const safePage = clampPage(page, textSyntaxTree.totalPage || 0);
   const block = findBlockByPage(textSyntaxTree, safePage);
-  const startPage = block ? textSyntaxTree.blockIdPage[block.id] ?? safePage : safePage;
-  const endPage = block ? getBlockPageEnd(textSyntaxTree, block.id) ?? startPage : startPage;
+  const startPage = block ? (textSyntaxTree.blockIdPage[block.id] ?? safePage) : safePage;
+  const endPage = block ? (getBlockPageEnd(textSyntaxTree, block.id) ?? startPage) : startPage;
   const blockPageOffset = block ? clampPage(safePage - startPage, endPage - startPage) : undefined;
   const blockScrollRatio = block ? clampRatio((blockPageOffset ?? 0) / Math.max(endPage - startPage, 1)) : undefined;
   const globalProgress = textSyntaxTree.totalPage > 0 ? safePage / textSyntaxTree.totalPage : 0;
@@ -195,16 +199,19 @@ export const createReaderLocator = ({
 };
 
 export const createReaderScrollLocator = ({
+  anchorY,
   bookId,
   contentElement,
   textSyntaxTree,
 }: {
+  anchorY?: number;
   bookId: string;
   contentElement: HTMLElement | null;
   textSyntaxTree: TextSyntaxTree;
 }): ReaderLocator | undefined => {
   if (!contentElement) return undefined;
-  const anchor = findScrollAnchorElement(contentElement, getScrollAnchorY());
+  const resolvedAnchorY = typeof anchorY === 'number' && Number.isFinite(anchorY) ? anchorY : getScrollAnchorY();
+  const anchor = findScrollAnchorElement(contentElement, resolvedAnchorY);
   const blockId = anchor?.element.dataset.readerBlockId;
   const block = blockId ? textSyntaxTree.blocks.find((item) => item.id === blockId) : undefined;
   if (!block) return undefined;
@@ -226,9 +233,7 @@ export const createReaderScrollLocator = ({
 
 export const resolveReaderLocatorPage = (locator: ReaderLocator, textSyntaxTree: TextSyntaxTree): number => {
   const totalPage = textSyntaxTree.totalPage || 0;
-  const exactBlock = locator.blockId
-    ? textSyntaxTree.blocks.find((block) => block.id === locator.blockId)
-    : undefined;
+  const exactBlock = locator.blockId ? textSyntaxTree.blocks.find((block) => block.id === locator.blockId) : undefined;
   const block = exactBlock || findBlockByQuote(textSyntaxTree, locator);
 
   if (block) {
@@ -239,6 +244,10 @@ export const resolveReaderLocatorPage = (locator: ReaderLocator, textSyntaxTree:
         locator.blockPageOffset ??
         Math.round(clampRatio(locator.blockScrollRatio ?? 0) * Math.max(endPage - startPage, 0));
       return clampPage(startPage + offset, totalPage);
+    }
+    if (exactBlock) {
+      const titlePage = block.titleId === undefined ? undefined : textSyntaxTree.titleIdPage[block.titleId];
+      return clampPage(typeof titlePage === 'number' ? titlePage : locator.page, totalPage);
     }
   }
 

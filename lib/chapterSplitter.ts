@@ -693,14 +693,11 @@ const getFamilyMinScore = (family: CandidateFamily, strict: boolean): number => 
 };
 
 const selectSequenceCandidates = (
-  candidates: ChapterCandidate[],
+  familyCandidates: ChapterCandidate[],
   text: string,
   family: CandidateFamily,
   strict: boolean,
 ): ChapterCandidate[] => {
-  const familyCandidates = candidates
-    .filter((candidate) => candidate.family === family)
-    .sort((a, b) => a.start - b.start);
   let preparedCandidates = removeTocLikeCandidates(
     familyCandidates.filter((candidate) => candidate.score >= getFamilyMinScore(family, strict)),
     familyCandidates,
@@ -808,12 +805,12 @@ const getOrdinalConsistency = (candidates: ChapterCandidate[]): number => {
 };
 
 const evaluateSequence = (
-  candidates: ChapterCandidate[],
+  familyCandidates: ChapterCandidate[],
   text: string,
   family: CandidateFamily,
   strict: boolean,
 ): SequenceEvaluation => {
-  const selected = selectSequenceCandidates(candidates, text, family, strict);
+  const selected = selectSequenceCandidates(familyCandidates, text, family, strict);
   if (selected.length === 0) {
     return { family, candidates: [], confidence: 0 };
   }
@@ -868,8 +865,16 @@ const detectByCandidates = (
   allowedFamilies: CandidateFamily[],
 ): SequenceEvaluation | undefined => {
   const candidates = collectCandidates(text, strict);
+  const familyCandidates = new Map<CandidateFamily, ChapterCandidate[]>();
+  for (const candidate of candidates) {
+    const list = familyCandidates.get(candidate.family);
+    if (list) list.push(candidate);
+    else familyCandidates.set(candidate.family, [candidate]);
+  }
+  // Each family's slice is already in document order because collectCandidates iterates lines in order.
+
   const evaluations = allowedFamilies
-    .map((family) => evaluateSequence(candidates, text, family, strict))
+    .map((family) => evaluateSequence(familyCandidates.get(family) || [], text, family, strict))
     .filter(isAcceptedSequence)
     .sort((a, b) => b.confidence - a.confidence);
 

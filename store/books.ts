@@ -1,72 +1,68 @@
-import CryptoJS from 'crypto-js';
 import { db } from '@/store/index';
+import { deleteBookResources, persistBookResources, releaseBookResourceUrls } from '@/lib/bookResources';
+import { createRandomId, getErrorMessage, sha256Hex } from '@/lib/utils';
+import type { BookResourceRecord } from '@/lib/bookResources';
 import type { IDBResult } from '@/lib/indexedDB';
+import type { ReaderBookDocument, ReaderBookSourceType } from '@/lib/readerDocument';
 
 export interface BookInfo {
   id: string;
   title: string;
   author: string;
   image: string;
-  content: ArrayBuffer | Uint8Array<ArrayBuffer>;
-  encoding: string;
+  document: ReaderBookDocument;
+  sourceType: ReaderBookSourceType;
   createTime?: number;
   modifyTime?: number;
 }
 
 export interface SearchResult extends BookInfo {
-  matchedText: string;
+  matchedText: string[];
 }
 
 const STORE_NAME_BOOKS_INFO_KEY = 'books_info';
 
-const ID = 'id';
+const FINGERPRINT_SAMPLE_SIZE = 4096;
+
+const PENDING_OPERATION_TIMEOUT_MS = 60_000;
 
 export const createBookStore = (): void => {
-  db.createObjectStore({ storeName: STORE_NAME_BOOKS_INFO_KEY, options: { keyPath: ID } });
+  db.createObjectStore({ storeName: STORE_NAME_BOOKS_INFO_KEY, options: { keyPath: 'id' } });
 };
 
-export const addBook = (data: {
+const computeBookFingerprint = async (data: {
+  author: string;
+  document: ReaderBookDocument;
+  sourceType: ReaderBookSourceType;
   title: string;
-  author?: string;
-  image?: string;
-  content: ArrayBuffer | Uint8Array<ArrayBuffer>;
-  encoding: string;
-}): Promise<IDBResult<BookInfo>> => {
-  const { title = '', author = '', image = '', content, encoding = '' } = data;
-  const hash = CryptoJS.MD5(typeof content === 'string' ? content : CryptoJS.lib.WordArray.create(content)).toString();
-
-  // 先检查是否已存在相同 hash 的书籍
-  return getBookById<BookInfo>(hash).then((res) => {
-    if (!res.error && res.data) {
-      // 如果书籍已存在，直接返回已存在的书籍信息
-      return {
-        status: 'success',
-        code: 0,
-        data: res.data,
-        error: false,
-        message: 'Book already exists',
-      };
-    }
-
-    // 如果书籍不存在，则添加新书
-    const createTime = Date.now();
-    const bookInfo: BookInfo = {
-      id: `${hash}`,
-      title,
-      author,
-      image,
-      content,
-      encoding,
-      createTime,
-      modifyTime: Date.now(),
-    };
-    return performWorkerOperation<BookInfo>('add', { bookInfo });
-  });
+}): Promise<string> => {
+  const { author, document, sourceType, title } = data;
+  const rawText = document.rawText || '';
+  const sampleHead = rawText.slice(0, FINGERPRINT_SAMPLE_SIZE);
+  const sampleTail = rawText.length > FINGERPRINT_SAMPLE_SIZE ? rawText.slice(-FINGERPRINT_SAMPLE_SIZE) : '';
+  const seed = [sourceType, title, author, rawText.length, sampleHead, sampleTail].join('\u0000');
+  return sha256Hex(seed);
 };
 
-// 创建 worker
+const successResult = <T>(data: T, message?: string): IDBResult<T> => ({
+  status: 'success',
+  code: 0,
+  data,
+  error: false,
+  message,
+});
+
+const errorResult = <T>(message: string, fallback?: T): IDBResult<T> => ({
+  status: 'error',
+  code: 1,
+  data: fallback as T,
+  error: true,
+  message,
+});
+
 let dbWorker: Worker | null = null;
-const createDBWorker = () => {
+
+const getDBWorker = (): Worker => {
   if (!dbWorker) {
     dbWorker = new Worker(new URL('../workers/dbWorker.ts', import.meta.url), {
       type: 'module',
@@ -75,55 +71,145 @@ const createDBWorker = () => {
   return dbWorker;
 };
 
-// 通用的 worker 操作函数
-const performWorkerOperation = <T = unknown>(type: string, data: any = {}): Promise<IDBResult<T>> => {
+interface WorkerResponseEnvelope<T> extends IDBResult<T> {
+  operationId: string;
+}
+
+const performWorkerOperation = <T = unknown>(type: string, data: Record<string, unknown> = {}): Promise<IDBResult<T>> => {
   return new Promise((resolve) => {
     if (!db.database) {
-      resolve({
-        status: 'error',
-        code: 1,
-        data: undefined as T,
-        error: true,
-        message: 'Database not initialized',
-      });
+      resolve(errorResult<T>('Database not initialized'));
       return;
     }
 
-    const worker = createDBWorker();
-    const operationId = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+    const worker = getDBWorker();
+    const operationId = createRandomId('op');
 
-    const messageHandler = (e: MessageEvent) => {
-      if (e.data.operationId === operationId) {
-        worker.removeEventListener('message', messageHandler);
-        resolve(e.data);
+    let settled = false;
+    let timer: number | undefined;
+
+    const cleanup = (): void => {
+      worker.removeEventListener('message', messageHandler);
+      worker.removeEventListener('error', errorHandler);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
       }
     };
 
-    const errorHandler = (error: ErrorEvent) => {
-      worker.removeEventListener('error', errorHandler);
-      resolve({
-        status: 'error',
-        code: 1,
-        data: undefined as T,
-        error: true,
-        message: error.message,
-      });
+    const settle = (result: IDBResult<T>): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
+
+    const messageHandler = (event: MessageEvent<WorkerResponseEnvelope<T>>): void => {
+      if (event.data?.operationId !== operationId) return;
+      const { operationId: _operationId, ...rest } = event.data;
+      settle(rest as IDBResult<T>);
+    };
+
+    const errorHandler = (event: ErrorEvent): void => {
+      settle(errorResult<T>(event.message || 'Worker error'));
     };
 
     worker.addEventListener('message', messageHandler);
     worker.addEventListener('error', errorHandler);
 
-    worker.postMessage({
-      type,
-      data,
-      dbName: db.database.name,
-      storeName: STORE_NAME_BOOKS_INFO_KEY,
-      operationId,
-    });
+    timer = window.setTimeout(() => {
+      settle(errorResult<T>('Worker operation timed out'));
+    }, PENDING_OPERATION_TIMEOUT_MS);
+
+    try {
+      worker.postMessage({
+        type,
+        data,
+        dbName: db.database.name,
+        storeName: STORE_NAME_BOOKS_INFO_KEY,
+        operationId,
+      });
+    } catch (error) {
+      settle(errorResult<T>(getErrorMessage(error, 'Failed to dispatch worker message')));
+    }
   });
 };
 
-// 搜索函数
+export const addBook = async (data: {
+  title: string;
+  author?: string;
+  image?: string;
+  document: ReaderBookDocument;
+  sourceType: ReaderBookSourceType;
+  resources?: BookResourceRecord[];
+}): Promise<IDBResult<BookInfo>> => {
+  const { title = '', author = '', image = '', document, sourceType, resources = [] } = data;
+  const id = await computeBookFingerprint({ author, document, sourceType, title });
+
+  const existing = await getBookById<BookInfo>(id);
+  if (!existing.error && existing.data) {
+    const { id: existingId, title: existingTitle, author: existingAuthor, image: existingImage, sourceType: existingSourceType, createTime, modifyTime } = existing.data;
+    return successResult(
+      {
+        id: existingId,
+        title: existingTitle,
+        author: existingAuthor,
+        image: existingImage,
+        sourceType: existingSourceType,
+        createTime,
+        modifyTime,
+        document: { version: 1 } as ReaderBookDocument,
+      },
+      'Book already exists',
+    );
+  }
+
+  const now = Date.now();
+  const bookInfo: BookInfo = {
+    id,
+    title,
+    author,
+    image,
+    document,
+    sourceType,
+    createTime: now,
+    modifyTime: now,
+  };
+
+  if (resources.length > 0) {
+    try {
+      await persistBookResources(resources.map((record) => ({ ...record, bookId: id })));
+    } catch (error) {
+      console.error('Failed to persist book resources:', getErrorMessage(error));
+    }
+  }
+
+  const addResult = await performWorkerOperation<BookInfo>('add', { bookInfo });
+  if (addResult.error) {
+    // Race condition: another import added the same book between our get and add.
+    const conflict = await getBookById<BookInfo>(id);
+    if (!conflict.error && conflict.data) {
+      const { id: conflictId, title: conflictTitle, author: conflictAuthor, image: conflictImage, sourceType: conflictSourceType, createTime, modifyTime } = conflict.data;
+      return successResult(
+        {
+          id: conflictId,
+          title: conflictTitle,
+          author: conflictAuthor,
+          image: conflictImage,
+          sourceType: conflictSourceType,
+          createTime,
+          modifyTime,
+          document: { version: 1 } as ReaderBookDocument,
+        },
+        'Book already exists',
+      );
+    }
+    return addResult;
+  }
+  // The worker returns a metadata-only projection on success — relay it.
+  return addResult;
+};
+
 export const searchBooksByTitle = <T = unknown>(keyword: string): Promise<IDBResult<T[]>> => {
   return performWorkerOperation<T[]>('search', { keyword, searchType: 'title' });
 };
@@ -136,12 +222,23 @@ export const searchBooksByContent = <T = unknown>(keyword: string): Promise<IDBR
   return performWorkerOperation<T[]>('search', { keyword, searchType: 'content' });
 };
 
-// 获取所有书籍
 export const getAllBooks = <T = unknown>(): Promise<IDBResult<T[]>> => {
   return performWorkerOperation<T[]>('getAll');
 };
 
-// 获取单个书籍
 export const getBookById = <T = unknown>(id: string): Promise<IDBResult<T>> => {
   return performWorkerOperation<T>('get', { key: id });
+};
+
+export const deleteBookById = async (id: string): Promise<IDBResult<null>> => {
+  const result = await performWorkerOperation<null>('delete', { key: id });
+  if (!result.error) {
+    releaseBookResourceUrls(id);
+    try {
+      await deleteBookResources(id);
+    } catch (error) {
+      console.error('Failed to delete book resources:', getErrorMessage(error));
+    }
+  }
+  return result;
 };

@@ -174,7 +174,7 @@
   max-width: 100%;
   height: 58px;
   border-radius: 12px;
-  background: hsla(0,0%,100%,.1);
+  background: hsla(0, 0%, 100%, 0.1);
   color: var(--text-color-1);
   display: flex;
   align-items: center;
@@ -185,7 +185,7 @@
 }
 
 .reader-scroll-next-chapter:hover {
-  background: color-mix(in srgb, hsla(0,0%,100%,.1) 88%, var(--text-color-1));
+  background: color-mix(in srgb, hsla(0, 0%, 100%, 0.1) 88%, var(--text-color-1));
 }
 
 .reader-content-block {
@@ -277,7 +277,7 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  gap: 3px;
+  gap: 4px;
   font-family: inherit;
   font-size: 11px;
   font-weight: 400;
@@ -293,7 +293,7 @@
   display: block;
 }
 
-.reader-selection-menu-item.second-item svg{
+.reader-selection-menu-item.second-item svg {
   width: 19px;
   height: 19px;
   display: block;
@@ -676,6 +676,26 @@
   widows: 1;
 }
 
+.reader-content-image {
+  break-inside: avoid;
+  line-height: 0;
+  margin: 0 0 var(--reader-paragraph-gap, 20px);
+  text-align: center;
+}
+
+.reader-content-image img {
+  display: block;
+  margin: 0 auto;
+  max-height: 70vh;
+  max-width: 100%;
+  object-fit: contain;
+  width: auto;
+}
+
+.reader-column-flow .reader-content-image img {
+  max-height: max(80px, calc(var(--reader-page-height, 100vh) - var(--reader-paragraph-gap, 20px)));
+}
+
 .reader-content-heading {
   break-after: avoid;
   break-inside: avoid;
@@ -703,7 +723,6 @@
   -webkit-box-decoration-break: clone;
   border-radius: 3px;
   color: inherit;
-  padding: 0 1px;
 }
 
 .reader-search-match-highlight {

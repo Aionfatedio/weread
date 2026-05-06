@@ -1,4 +1,5 @@
 import { EVENT_NAME, syncHook } from '@/lib/subscribe';
+import { clamp, createRandomId, safeReadStorage, safeWriteStorage } from '@/lib/utils';
 import type { ReaderBlock, TextSyntaxTree } from '@/lib/transformText';
 
 export type ReaderAnnotationType = 'marker' | 'note' | 'underline' | 'wave';
@@ -50,13 +51,10 @@ const getDefaultReaderAnnotationColor = (type?: ReaderStyleAnnotationType): stri
   return type ? DEFAULT_READER_STYLE_ANNOTATION_COLORS[type] : DEFAULT_READER_ANNOTATION_COLOR;
 };
 
-const canUseStorage = (): boolean => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-
 const readAnnotationMap = (): Record<string, ReaderAnnotation[]> => {
-  if (!canUseStorage()) return {};
+  const value = safeReadStorage(ANNOTATION_STORAGE_KEY);
+  if (!value) return {};
   try {
-    const value = window.localStorage.getItem(ANNOTATION_STORAGE_KEY);
-    if (!value) return {};
     const parsed = JSON.parse(value) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     return parsed as Record<string, ReaderAnnotation[]>;
@@ -66,12 +64,7 @@ const readAnnotationMap = (): Record<string, ReaderAnnotation[]> => {
 };
 
 const writeAnnotationMap = (value: Record<string, ReaderAnnotation[]>): void => {
-  if (!canUseStorage()) return;
-  try {
-    window.localStorage.setItem(ANNOTATION_STORAGE_KEY, JSON.stringify(value));
-  } catch {
-    // Ignore restricted storage contexts.
-  }
+  safeWriteStorage(ANNOTATION_STORAGE_KEY, JSON.stringify(value));
 };
 
 const emitAnnotationChange = (): void => {
@@ -79,23 +72,30 @@ const emitAnnotationChange = (): void => {
 };
 
 const normalizeRange = (startOffset: number, endOffset: number, textLength: number): { start: number; end: number } => {
-  const start = Math.min(Math.max(Math.floor(startOffset), 0), Math.max(textLength, 0));
-  const end = Math.min(Math.max(Math.floor(endOffset), 0), Math.max(textLength, 0));
+  const limit = Math.max(textLength, 0);
+  const start = clamp(Math.floor(startOffset), 0, limit);
+  const end = clamp(Math.floor(endOffset), 0, limit);
   return start <= end ? { start, end } : { start: end, end: start };
 };
 
-const createAnnotationId = (): string => {
-  if (typeof window !== 'undefined' && typeof window.crypto?.randomUUID === 'function') {
-    return window.crypto.randomUUID();
+const createAnnotationId = (): string => createRandomId('annotation');
+
+const compareBlockId = (a: string, b: string): number => {
+  const matchA = /(\d+)(?!.*\d)/u.exec(a);
+  const matchB = /(\d+)(?!.*\d)/u.exec(b);
+  const numericA = matchA ? Number(matchA[1]) : Number.NaN;
+  const numericB = matchB ? Number(matchB[1]) : Number.NaN;
+  if (Number.isFinite(numericA) && Number.isFinite(numericB) && numericA !== numericB) {
+    return numericA - numericB;
   }
-  return `annotation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return a.localeCompare(b);
 };
 
 export const getReaderAnnotations = (bookId?: string | null): ReaderAnnotation[] => {
   if (!bookId) return [];
   return [...(readAnnotationMap()[bookId] || [])].sort((a, b) => {
     if ((a.titleId ?? 0) !== (b.titleId ?? 0)) return (a.titleId ?? 0) - (b.titleId ?? 0);
-    if (a.blockId !== b.blockId) return a.blockId.localeCompare(b.blockId);
+    if (a.blockId !== b.blockId) return compareBlockId(a.blockId, b.blockId);
     return a.startOffset - b.startOffset || a.createdAt - b.createdAt;
   });
 };
@@ -207,20 +207,18 @@ export const deleteReaderAnnotation = (bookId: string, annotationId: string): vo
 
 export const getStoredReaderAnnotationColor = (type?: ReaderStyleAnnotationType): string => {
   const defaultColor = getDefaultReaderAnnotationColor(type);
-  if (!canUseStorage()) return defaultColor;
-  const value = window.localStorage.getItem(getColorStorageKey(type));
+  const value = safeReadStorage(getColorStorageKey(type));
   return READER_ANNOTATION_COLORS.includes(value as (typeof READER_ANNOTATION_COLORS)[number])
     ? value || defaultColor
     : defaultColor;
 };
 
 export const saveReaderAnnotationColor = (color: string, type?: ReaderStyleAnnotationType): void => {
-  if (!canUseStorage()) return;
   const defaultColor = getDefaultReaderAnnotationColor(type);
   const normalized = READER_ANNOTATION_COLORS.includes(color as (typeof READER_ANNOTATION_COLORS)[number])
     ? color
     : defaultColor;
-  window.localStorage.setItem(getColorStorageKey(type), normalized);
+  safeWriteStorage(getColorStorageKey(type), normalized);
 };
 
 export const getAnnotationBlock = (
