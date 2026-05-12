@@ -1,101 +1,31 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { BookInfo } from '@/store/books';
 import type { TextSyntaxTree } from '@/lib/transformText';
-import {
-  EVENT_NAME,
-  getCurrentBookDetail,
-  getPageNum,
-  getReaderNavigationTarget,
-  getTextSyntaxTree,
-  setPageNum,
-  setReaderNavigationTarget,
-  syncHook,
-} from '@/lib/subscribe';
+import { EVENT_NAME, getCurrentBookDetail, getTextSyntaxTree, syncHook } from '@/lib/subscribe';
 import { SORT_DIRECTION } from '@/lib/enums';
-import { getReaderBookmarkForPage } from '@/lib/readerAnnotations';
 import { getReaderProgress } from '@/lib/readerProgress';
 import { getStoredReaderReadingMode } from '@/lib/readerSettings';
 import { useResolvedBookImage } from '@/lib/useResolvedBookImage';
-import { BookCoverFallback } from '@/components/BookCard';
 import { OcticonClock, OcticonSortAsc } from '@/components/Octicon';
+import { BookDataPanel } from '@/components/Catalogue/BookDataPanel';
+import { BookSummaryButton } from '@/components/Catalogue/BookSummaryButton';
+import { CatalogueProgressIcon } from '@/components/Catalogue/CatalogueProgressIcon';
+import {
+  formatReadingDuration,
+  getCatalogueReadPercent,
+  getCurrentTitleId,
+  isCurrentPageBookmarked,
+  turnToCatalogueTitle,
+} from '@/components/Catalogue/catalogueUtils';
 import './index.scss';
-
-const toPage = (e: Event) => {
-  const target = e.target as HTMLElement;
-  if (target.closest('[data-reader-catalog-bookmark]')) return;
-  const index = target.closest<HTMLElement>('[data-title-id]')?.dataset.titleId || '';
-  const titleId = Number(index);
-  if (!Number.isFinite(titleId)) return;
-  const textSyntaxTree: TextSyntaxTree = getTextSyntaxTree();
-  const page = textSyntaxTree?.titleIdPage[index];
-  setReaderNavigationTarget({ page, revision: Date.now(), titleId });
-  if (page !== undefined) {
-    // Fallback for browsers that don't support View Transitions API
-    if (!document.startViewTransition) {
-      setPageNum(page);
-      return;
-    }
-    // With View Transition
-    document.startViewTransition(() => {
-      setPageNum(page);
-    });
-  }
-  syncHook.call(EVENT_NAME.CLOSE_POPOVER);
-};
-
-const getCurrentTitleId = (bookId: string | undefined, textSyntaxTree: TextSyntaxTree): number | undefined => {
-  const pageTitleId = textSyntaxTree.pageTitleId[getPageNum()] ?? textSyntaxTree.pageTitleId[0];
-  const progress = getReaderProgress(bookId);
-  const progressTitleId = progress?.titleId;
-  const navigationTarget = getReaderNavigationTarget();
-  if (getStoredReaderReadingMode() === 'scroll') {
-    if (navigationTarget.titleId !== undefined && (!progress || navigationTarget.revision >= progress.updatedAt)) {
-      return navigationTarget.titleId;
-    }
-    if (progressTitleId !== undefined) {
-      return progressTitleId;
-    }
-  }
-  return pageTitleId;
-};
-
-const getCatalogueReadPercent = (
-  bookId: string | undefined,
-  currentTitleId: number | undefined,
-): number | undefined => {
-  const progress = getReaderProgress(bookId);
-  if (!progress || progress.titleId !== currentTitleId) return undefined;
-  if (typeof progress.readPercent !== 'number' || !Number.isFinite(progress.readPercent)) return undefined;
-  const percent = Math.min(Math.max(Math.floor(progress.readPercent), 0), 100);
-  return percent >= 1 ? percent : undefined;
-};
-
-const isCurrentPageBookmarked = (bookId: string | undefined): boolean => {
-  return Boolean(getReaderBookmarkForPage(bookId, getPageNum()));
-};
-
-const formatReadingDuration = (durationMs: number | undefined): string => {
-  const totalMinutes = Math.max(0, Math.floor((durationMs || 0) / 60_000));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours > 0 ? `阅读时长${hours}小时${minutes}分` : `阅读时长${minutes}分`;
-};
-
-const CatalogueProgressIcon = (): React.JSX.Element => (
-  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path
-      d="M9.82962 2.971 13.7026 6.62675c.0987.07768.1762.17832.2202.29838.0018.00883.0036.01412.0036.01942.0317.07062.0422.14831.0458.22599 0 .0106.0088.02295.0088.03355 0 .02118-.0141.03884-.0141.06003-.0035.0459-.0141.09181-.03.13771-.0141.05473-.037.10417-.0616.15361-.0159.03001-.037.05826-.0582.08651-.0193.02472-.0281.0565-.0546.07945l-3.93288 3.8102c-.28364.286-.74521.286-1.02532 0-.28363-.2825-.28363-.7451 0-1.0311l2.6962-2.57077-9.93813.00008c-.40519 0-.738151-.33016-.738151-.73624s.331201-.73624.738151-.73624l9.91523-.00007L8.8043 4.00033c-.28363-.28073-.28363-.74507 0-1.02933.28011-.28249.74168-.28249 1.02532 0Z"
-      fill="currentColor"
-    />
-  </svg>
-);
 
 export const Catalogue = (): React.JSX.Element => {
   const sortRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasAlignedCurrentTitleRef = useRef(false);
   const [sortDirection, setSortDirection] = useState(SORT_DIRECTION.DOWN);
-  const [, setMetaRevision] = useState(0);
+  const [metaRevision, setMetaRevision] = useState(0);
+  const [bookDataPanelOpen, setBookDataPanelOpen] = useState(false);
   const bookDetail: BookInfo | null = getCurrentBookDetail();
   const textSyntaxTree: TextSyntaxTree = getTextSyntaxTree();
   const [currentTitleId, setCurrentTitleId] = useState(() => getCurrentTitleId(bookDetail?.id, textSyntaxTree));
@@ -105,7 +35,7 @@ export const Catalogue = (): React.JSX.Element => {
   const isScrollMode = getStoredReaderReadingMode() === 'scroll';
   const readingDurationLabel = useMemo(
     () => formatReadingDuration(getReaderProgress(bookDetail?.id)?.totalReadingMs),
-    [bookDetail?.id],
+    [bookDetail?.id, metaRevision],
   );
 
   useEffect(() => {
@@ -140,6 +70,16 @@ export const Catalogue = (): React.JSX.Element => {
     setMetaRevision((revision) => revision + 1);
   }, []);
 
+  const openBookDataPanel = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setBookDataPanelOpen(true);
+  }, []);
+
+  const closeBookDataPanel = useCallback(() => {
+    setBookDataPanelOpen(false);
+  }, []);
+
   const alignCurrentTitle = useCallback(() => {
     if (hasAlignedCurrentTitleRef.current || currentTitleId === undefined) return false;
     const container = scrollRef.current;
@@ -159,10 +99,10 @@ export const Catalogue = (): React.JSX.Element => {
   }, [currentTitleId]);
 
   useEffect(() => {
-    scrollRef.current?.addEventListener('click', toPage);
+    scrollRef.current?.addEventListener('click', turnToCatalogueTitle);
     sortRef.current?.addEventListener('click', toSort);
     return () => {
-      scrollRef.current?.removeEventListener('click', toPage);
+      scrollRef.current?.removeEventListener('click', turnToCatalogueTitle);
       sortRef.current?.removeEventListener('click', toSort);
     };
   }, [toSort]);
@@ -173,12 +113,14 @@ export const Catalogue = (): React.JSX.Element => {
     syncHook.tap(EVENT_NAME.SET_CURRENT_BOOK_DETAIL, updateCatalogueMeta);
     syncHook.tap(EVENT_NAME.SET_READER_ANNOTATIONS, updateCatalogueMeta);
     syncHook.tap(EVENT_NAME.SET_READER_NAVIGATION_TARGET, updateCatalogueMeta);
+    syncHook.tap(EVENT_NAME.SET_READER_PROGRESS, updateCatalogueMeta);
     syncHook.tap(EVENT_NAME.SET_TEXT_SYNTAX_TREE, updateCatalogueMeta);
     return () => {
       syncHook.off(EVENT_NAME.SET_CURRENT_BOOK_PAGE, updateCatalogueMeta);
       syncHook.off(EVENT_NAME.SET_CURRENT_BOOK_DETAIL, updateCatalogueMeta);
       syncHook.off(EVENT_NAME.SET_READER_ANNOTATIONS, updateCatalogueMeta);
       syncHook.off(EVENT_NAME.SET_READER_NAVIGATION_TARGET, updateCatalogueMeta);
+      syncHook.off(EVENT_NAME.SET_READER_PROGRESS, updateCatalogueMeta);
       syncHook.off(EVENT_NAME.SET_TEXT_SYNTAX_TREE, updateCatalogueMeta);
     };
   }, [updateCatalogueMeta]);
@@ -196,17 +138,13 @@ export const Catalogue = (): React.JSX.Element => {
 
   return (
     <>
-      <div className="px-7 py-2 flex flex-row flex-nowrap items-center shrink-0">
-        {resolvedCover && !coverFailed ? (
-          <img className="w-14 mr-5" src={resolvedCover} alt={bookDetail?.title} onError={() => setCoverFailed(true)} />
-        ) : (
-          <BookCoverFallback className="w-14 h-20 mr-5" title={bookDetail?.title} />
-        )}
-        <div>
-          <div className="text-lg text-text-color-1 font-medium break-all">{bookDetail?.title}</div>
-          <div className="text-sm text-text-color-2 font-medium mt-1 break-all">{bookDetail?.author}</div>
-        </div>
-      </div>
+      <BookSummaryButton
+        bookDetail={bookDetail}
+        coverFailed={coverFailed}
+        coverUrl={resolvedCover}
+        onClick={openBookDataPanel}
+        onCoverError={() => setCoverFailed(true)}
+      />
       <div className="readerCatalog_header_meta">
         <div className="readerCatalog_reading_duration">
           <OcticonClock />
@@ -269,6 +207,16 @@ export const Catalogue = (): React.JSX.Element => {
           );
         })}
       </div>
+      <BookDataPanel
+        bookDetail={bookDetail}
+        coverFailed={coverFailed}
+        coverUrl={resolvedCover}
+        onClose={closeBookDataPanel}
+        onCoverError={() => setCoverFailed(true)}
+        open={bookDataPanelOpen}
+        revision={metaRevision}
+        textSyntaxTree={textSyntaxTree}
+      />
     </>
   );
 };

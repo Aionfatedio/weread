@@ -1,10 +1,95 @@
+.reader-popover-panel {
+  position: relative;
+  overflow: hidden;
+}
+
+.reader-catalog-book-summary {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background-color 160ms ease;
+}
+
+.reader-catalog-data-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
+  background: rgba(0, 0, 0, 0.56);
+  backdrop-filter: blur(6px);
+}
+
+.reader-catalog-data-overlay[data-state='open'] {
+  animation: reader-catalog-data-overlay-in 180ms ease-out both;
+}
+
+.reader-catalog-data-overlay[data-state='closed'] {
+  animation: reader-catalog-data-overlay-out 180ms ease-in both;
+}
+
+.reader-catalog-data-sheet {
+  border-radius: 8px;
+}
+
+.reader-catalog-data-overlay[data-state='open'] .reader-catalog-data-sheet {
+  animation: reader-catalog-data-sheet-in 180ms ease-out both;
+}
+
+.reader-catalog-data-overlay[data-state='closed'] .reader-catalog-data-sheet {
+  animation: reader-catalog-data-sheet-out 180ms ease-in both;
+}
+
+@keyframes reader-catalog-data-overlay-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes reader-catalog-data-overlay-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes reader-catalog-data-sheet-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes reader-catalog-data-sheet-out {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
 .readerCatalog_list_item {
   min-height: 48px;
   padding: 0 28px;
-  color: var(--text-color-2);
+  color: var(--text-color-1);
   cursor: pointer;
   font-size: 16px;
-  font-weight: 400;
+  font-weight: 450;
 }
 
 .readerCatalog_list_item:hover {

@@ -1,3 +1,5 @@
+import { hydrateReaderSettingCache, persistReaderSetting, readCachedReaderSetting } from '@/lib/readerSettingStore';
+
 export type ReaderTheme = 'light' | 'dark';
 
 export type ReaderFontSource = 'default' | 'system';
@@ -5,6 +7,8 @@ export type ReaderFontSource = 'default' | 'system';
 export type ReaderPageTurnEffect = 'fade' | 'jump' | 'scroll';
 
 export type ReaderReadingMode = 'paged' | 'scroll';
+
+export type ReaderFirstLineIndent = 'none' | 'indent';
 
 export interface ReaderFontSetting {
   id: string;
@@ -22,6 +26,8 @@ export const MAX_READER_FONT_SIZE = 36;
 export const DEFAULT_READER_PAGE_TURN_EFFECT: ReaderPageTurnEffect = 'jump';
 
 export const DEFAULT_READER_READING_MODE: ReaderReadingMode = 'paged';
+
+export const DEFAULT_READER_FIRST_LINE_INDENT: ReaderFirstLineIndent = 'none';
 
 export const DEFAULT_READER_PAGE_GAP_RATIO = 1 / 9;
 
@@ -57,15 +63,11 @@ const READER_PAGE_TURN_EFFECT_STORAGE_KEY = 'weread-reader-page-turn-effect';
 
 const READER_READING_MODE_STORAGE_KEY = 'weread-reader-reading-mode';
 
+const READER_FIRST_LINE_INDENT_STORAGE_KEY = 'weread-reader-first-line-indent';
+
 const READER_PAGE_GAP_RATIO_STORAGE_KEY = 'weread-reader-page-gap-ratio';
 
 const READER_SCROLL_PADDING_X_STORAGE_KEY = 'weread-reader-scroll-padding-x';
-
-const READER_FONT_SIZE_STORAGE_VERSION_KEY = 'weread-reader-font-size-version';
-
-const READER_FONT_SIZE_STORAGE_VERSION = 'continuous-v2';
-
-const PREVIOUS_READER_FONT_SIZE_DEFAULT = 21;
 
 const READER_FONT_FALLBACK = DEFAULT_READER_FONT_FAMILY;
 
@@ -74,21 +76,11 @@ let readerSettingChangeTimer: number | undefined;
 const canUseDOM = (): boolean => typeof window !== 'undefined' && typeof document !== 'undefined';
 
 const readStorage = (key: string): string | null => {
-  if (!canUseDOM()) return null;
-  try {
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
+  return readCachedReaderSetting(key);
 };
 
 const writeStorage = (key: string, value: string): void => {
-  if (!canUseDOM()) return;
-  try {
-    window.localStorage.setItem(key, value);
-  } catch {
-    // Local storage can be unavailable in restricted browser contexts.
-  }
+  persistReaderSetting(key, value);
 };
 
 const clampFontSize = (value: number): number => {
@@ -101,6 +93,10 @@ const normalizePageTurnEffect = (value: unknown): ReaderPageTurnEffect => {
 
 const normalizeReadingMode = (value: unknown): ReaderReadingMode => {
   return value === 'scroll' || value === 'paged' ? value : DEFAULT_READER_READING_MODE;
+};
+
+const normalizeFirstLineIndent = (value: unknown): ReaderFirstLineIndent => {
+  return value === 'indent' ? 'indent' : DEFAULT_READER_FIRST_LINE_INDENT;
 };
 
 const getLineHeight = (fontSize: number): number => {
@@ -172,18 +168,11 @@ export const getStoredReaderFontSize = (): number => {
   if (!storedValue) return DEFAULT_READER_FONT_SIZE;
   const value = Number(storedValue);
   if (!Number.isFinite(value)) return DEFAULT_READER_FONT_SIZE;
-  if (
-    readStorage(READER_FONT_SIZE_STORAGE_VERSION_KEY) !== READER_FONT_SIZE_STORAGE_VERSION &&
-    value === PREVIOUS_READER_FONT_SIZE_DEFAULT
-  ) {
-    return DEFAULT_READER_FONT_SIZE;
-  }
   return clampFontSize(value);
 };
 
 export const saveReaderFontSize = (fontSize: number): void => {
   writeStorage(READER_FONT_SIZE_STORAGE_KEY, `${clampFontSize(fontSize)}`);
-  writeStorage(READER_FONT_SIZE_STORAGE_VERSION_KEY, READER_FONT_SIZE_STORAGE_VERSION);
 };
 
 export const getStoredReaderPageTurnEffect = (): ReaderPageTurnEffect => {
@@ -200,6 +189,22 @@ export const getStoredReaderReadingMode = (): ReaderReadingMode => {
 
 export const saveReaderReadingMode = (mode: ReaderReadingMode): void => {
   writeStorage(READER_READING_MODE_STORAGE_KEY, normalizeReadingMode(mode));
+};
+
+export const getStoredReaderFirstLineIndent = (): ReaderFirstLineIndent => {
+  return normalizeFirstLineIndent(readStorage(READER_FIRST_LINE_INDENT_STORAGE_KEY));
+};
+
+export const saveReaderFirstLineIndent = (value: ReaderFirstLineIndent): void => {
+  writeStorage(READER_FIRST_LINE_INDENT_STORAGE_KEY, normalizeFirstLineIndent(value));
+};
+
+export const applyReaderFirstLineIndent = (value: ReaderFirstLineIndent): void => {
+  if (!canUseDOM()) return;
+  document.documentElement.style.setProperty(
+    '--reader-paragraph-text-indent',
+    normalizeFirstLineIndent(value) === 'indent' ? '2em' : '0',
+  );
 };
 
 const clampPageGapRatio = (value: number): number => {
@@ -257,4 +262,11 @@ export const bootstrapReaderSettings = (): void => {
   applyReaderTheme(getStoredReaderTheme());
   applyReaderFont(getStoredReaderFont());
   applyReaderFontSize(getStoredReaderFontSize());
+  applyReaderFirstLineIndent(getStoredReaderFirstLineIndent());
+};
+
+export const hydrateReaderSettings = async (): Promise<void> => {
+  await hydrateReaderSettingCache();
+  bootstrapReaderSettings();
+  emitReaderSettingChange();
 };

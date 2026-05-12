@@ -779,6 +779,7 @@
   orphans: 1;
   text-align: justify;
   text-align-last: left;  
+  text-indent: var(--reader-paragraph-text-indent, 0);
   text-justify: inter-ideograph; 
   white-space: pre-wrap;
   widows: 1;

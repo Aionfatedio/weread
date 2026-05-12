@@ -1,5 +1,8 @@
 import type { ReaderBlock, TextSyntaxTree } from '@/lib/transformText';
 import { EVENT_NAME, syncHook } from '@/lib/subscribe';
+import { db } from '@/store';
+import { recordReaderReadingTime } from '@/lib/readerReadingTime';
+import { READER_PROGRESS_STORE_NAME } from '@/lib/readerStoreNames';
 
 export interface ReaderLocator {
   bookId: string;
@@ -20,7 +23,8 @@ export interface ReaderLocator {
   updatedAt: number;
 }
 
-const STORAGE_KEY = 'weread-reader-progress-v1';
+// V2 stores progress records in IndexedDB; the public store name intentionally has no version suffix.
+const STORAGE_KEY = 'weread-reader-progress';
 
 const clampPage = (page: number, totalPage: number): number => {
   return Math.min(Math.max(page, 0), Math.max(totalPage, 0));
@@ -46,28 +50,21 @@ const getScrollReadPercent = (globalProgress: number): number => {
   return Math.floor(clampRatio(globalProgress) * 100);
 };
 
-const isBrowser = (): boolean => typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+let progressMapCache: Record<string, ReaderLocator> = {};
 
 const readProgressMap = (): Record<string, ReaderLocator> => {
-  if (!isBrowser()) return {};
-  try {
-    const value = window.localStorage.getItem(STORAGE_KEY);
-    if (!value) return {};
-    const parsed = JSON.parse(value) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    return parsed as Record<string, ReaderLocator>;
-  } catch {
-    return {};
-  }
+  return progressMapCache;
 };
 
 const writeProgressMap = (value: Record<string, ReaderLocator>): void => {
-  if (!isBrowser()) return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-  } catch {
-    // Ignore storage quota and private-mode failures.
-  }
+  progressMapCache = value;
+};
+
+const persistReaderProgress = (locator: ReaderLocator): void => {
+  void db.update<ReaderLocator>({
+    data: locator,
+    storeName: STORAGE_KEY,
+  });
 };
 
 const getBlockPageEnd = (textSyntaxTree: TextSyntaxTree, blockId: string): number | undefined => {
@@ -293,22 +290,50 @@ export const getReaderProgress = (bookId?: string | null): ReaderLocator | undef
   return readProgressMap()[bookId];
 };
 
-export const addReaderReadingTime = (bookId: string | undefined | null, durationMs: number): void => {
+export const hydrateReaderProgress = async (): Promise<void> => {
+  const result = await db.readByCursor<ReaderLocator>({ storeName: READER_PROGRESS_STORE_NAME });
+  if (result.error) return;
+  const nextMap: Record<string, ReaderLocator> = {};
+  result.data.forEach((locator) => {
+    if (locator?.bookId) {
+      nextMap[locator.bookId] = locator;
+    }
+  });
+  writeProgressMap(nextMap);
+  syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
+};
+
+export const addReaderReadingTime = (
+  bookId: string | undefined | null,
+  durationMs: number,
+  options: { endedAt?: number; startedAt?: number } = {},
+): void => {
   if (!bookId || !Number.isFinite(durationMs) || durationMs <= 0) return;
   const map = readProgressMap();
   const previous = map[bookId];
-  const nextDuration = Math.max(0, Math.round(durationMs));
-  const now = Date.now();
-  map[bookId] = {
+  const endedAt = Number.isFinite(options.endedAt) ? (options.endedAt as number) : Date.now();
+  const nextDuration = recordReaderReadingTime({
+    bookId,
+    durationMs,
+    endedAt,
+    page: previous?.page,
+    readingMode: previous?.readingMode,
+    startedAt: Number.isFinite(options.startedAt) ? (options.startedAt as number) : endedAt - durationMs,
+    titleId: previous?.titleId,
+  });
+  if (nextDuration <= 0) return;
+  const next = {
     ...(previous || {
       bookId,
       page: 0,
-      updatedAt: now,
+      updatedAt: endedAt,
     }),
-    lastReadAt: now,
+    lastReadAt: endedAt,
     totalReadingMs: Math.max(0, Math.round(previous?.totalReadingMs || 0)) + nextDuration,
   };
+  map[bookId] = next;
   writeProgressMap(map);
+  persistReaderProgress(next);
   syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
 };
 
@@ -318,6 +343,7 @@ export const deleteReaderProgress = (bookId?: string | null): void => {
   if (!(bookId in map)) return;
   delete map[bookId];
   writeProgressMap(map);
+  void db.delete({ key: bookId, storeName: STORAGE_KEY });
   syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
 };
 
@@ -325,13 +351,15 @@ export const saveReaderProgress = (locator: ReaderLocator): void => {
   if (!locator.bookId) return;
   const map = readProgressMap();
   const previous = map[locator.bookId];
-  map[locator.bookId] = {
+  const next = {
     ...locator,
     lastReadAt: locator.lastReadAt ?? previous?.lastReadAt,
     totalReadingMs: locator.totalReadingMs ?? previous?.totalReadingMs,
     updatedAt: Date.now(),
   };
+  map[locator.bookId] = next;
   writeProgressMap(map);
+  persistReaderProgress(next);
   if (
     !previous ||
     previous.titleId !== locator.titleId ||

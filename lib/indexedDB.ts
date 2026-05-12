@@ -8,6 +8,41 @@
 
 import { getErrorMessage } from '@/lib/utils';
 
+const DATABASE_STORES: Array<{
+  name: string;
+  options: IDBObjectStoreParameters;
+  indexes?: Array<{ name: string; keyPath: string | string[]; options?: IDBIndexParameters }>;
+}> = [
+  { name: 'books_info', options: { keyPath: 'id' } },
+  {
+    name: 'weread-reader-annotations',
+    options: { keyPath: 'id' },
+    indexes: [
+      { name: 'bookId', keyPath: 'bookId' },
+      { name: 'type', keyPath: 'type' },
+    ],
+  },
+  { name: 'weread-reader-progress', options: { keyPath: 'bookId' } },
+  { name: 'weread-reader-settings', options: { keyPath: 'key' } },
+  {
+    name: 'weread-reader-reading-time-segments',
+    options: { keyPath: 'id' },
+    indexes: [
+      { name: 'bookId', keyPath: 'bookId' },
+      { name: 'dayKey', keyPath: 'dayKey' },
+      { name: 'bookIdDayKey', keyPath: ['bookId', 'dayKey'] },
+    ],
+  },
+  {
+    name: 'weread-reader-reading-time-daily',
+    options: { keyPath: 'id' },
+    indexes: [
+      { name: 'bookId', keyPath: 'bookId' },
+      { name: 'dayKey', keyPath: 'dayKey' },
+    ],
+  },
+];
+
 export interface IDBResult<T = unknown> {
   status: 'success' | 'error' | 'pending';
   code: number;
@@ -74,9 +109,13 @@ export class WebDB {
         this.database = request.result;
         this.version = this.database.version;
         // 在这里创建 ObjectStore
-        if (this.database && !this.database.objectStoreNames.contains('books_info')) {
-          this.database.createObjectStore('books_info', { keyPath: 'id' });
-        }
+        DATABASE_STORES.forEach((storeConfig) => {
+          if (!this.database || this.database.objectStoreNames.contains(storeConfig.name)) return;
+          const store = this.database.createObjectStore(storeConfig.name, storeConfig.options);
+          storeConfig.indexes?.forEach((index) => {
+            store.createIndex(index.name, index.keyPath, index.options);
+          });
+        });
       };
     });
   };

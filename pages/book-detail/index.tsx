@@ -117,12 +117,26 @@ const getStoredReaderAnnotationColorMap = (): ReaderAnnotationColorMap => ({
   wave: getStoredReaderAnnotationColor('wave'),
 });
 
-const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolean): void => {
+const getPerformanceNow = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+const getPerformanceWallTime = (performanceNow: number): number => {
+  if (typeof performance !== 'undefined' && Number.isFinite(performance.timeOrigin)) {
+    return Math.round(performance.timeOrigin + performanceNow);
+  }
+  return Date.now();
+};
+
+const useReaderReadingTimeTracker = (
+  bookId: string | undefined,
+  enabled: boolean,
+  readingMode: ReaderReadingMode,
+): void => {
   const stateRef = useRef({
     lastActiveAt: 0,
     lastTickAt: 0,
     running: false,
   });
+  const contentVisibleRef = useRef(true);
 
   useEffect(() => {
     if (!bookId || !enabled) return;
@@ -133,9 +147,10 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
       );
     };
 
-    const isReadingBlocked = () => getReaderControlPanelActive() || hasDetachedReaderPopoverPanel();
+    const isReadingBlocked = () =>
+      getReaderControlPanelActive() || hasDetachedReaderPopoverPanel() || !contentVisibleRef.current;
 
-    const flush = (now = Date.now()) => {
+    const flush = (now = getPerformanceNow()) => {
       const state = stateRef.current;
       if (!state.running || state.lastTickAt <= 0 || state.lastActiveAt <= 0) return;
 
@@ -143,7 +158,10 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
       const endAt = Math.min(now, activeUntil);
       const duration = endAt - state.lastTickAt;
       if (duration > 0) {
-        addReaderReadingTime(bookId, duration);
+        addReaderReadingTime(bookId, duration, {
+          endedAt: getPerformanceWallTime(endAt),
+          startedAt: getPerformanceWallTime(state.lastTickAt),
+        });
         state.lastTickAt = endAt;
       }
       if (now >= activeUntil) {
@@ -156,7 +174,7 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
         pause();
         return;
       }
-      const now = Date.now();
+      const now = getPerformanceNow();
       const state = stateRef.current;
       if (state.running && now >= state.lastActiveAt + READER_ACTIVE_IDLE_TIMEOUT_MS) {
         flush(now);
@@ -170,7 +188,7 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
     };
 
     const pause = () => {
-      flush(Date.now());
+      flush(getPerformanceNow());
       stateRef.current.running = false;
     };
 
@@ -179,7 +197,7 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
         pause();
         return;
       }
-      flush(Date.now());
+      flush(getPerformanceNow());
     };
 
     const onVisibilityChange = () => {
@@ -198,7 +216,28 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
       markActivity();
     };
 
+    let intersectionObserver: IntersectionObserver | undefined;
+    const observeReaderContent = () => {
+      if (typeof IntersectionObserver === 'undefined') return;
+      const target = document.querySelector<HTMLElement>('.reader-content-text');
+      if (!target) return;
+      intersectionObserver?.disconnect();
+      intersectionObserver = new IntersectionObserver(
+        ([entry]) => {
+          contentVisibleRef.current = Boolean(entry?.isIntersecting && entry.intersectionRatio > 0);
+          if (!contentVisibleRef.current) {
+            pause();
+            return;
+          }
+          markActivity();
+        },
+        { threshold: [0, 0.01] },
+      );
+      intersectionObserver.observe(target);
+    };
+
     markActivity();
+    const observeFrame = window.requestAnimationFrame(observeReaderContent);
     const timer = window.setInterval(flushActiveReadingTime, READER_READING_TIME_FLUSH_INTERVAL_MS);
     window.addEventListener('click', markActivity, true);
     window.addEventListener('keydown', markActivity, true);
@@ -208,9 +247,12 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
     window.addEventListener('wheel', markActivity, { capture: true, passive: true });
     document.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('pagehide', pause);
+    window.addEventListener('pageshow', markActivity);
     syncHook.tap(EVENT_NAME.SET_READER_CONTROL_PANEL_ACTIVE, onControlPanelActiveChange);
 
     return () => {
+      window.cancelAnimationFrame(observeFrame);
+      intersectionObserver?.disconnect();
       window.clearInterval(timer);
       pause();
       window.removeEventListener('click', markActivity, true);
@@ -221,6 +263,7 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
       window.removeEventListener('wheel', markActivity, true);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('pagehide', pause);
+      window.removeEventListener('pageshow', markActivity);
       syncHook.off(EVENT_NAME.SET_READER_CONTROL_PANEL_ACTIVE, onControlPanelActiveChange);
       stateRef.current = {
         lastActiveAt: 0,
@@ -228,7 +271,7 @@ const useReaderReadingTimeTracker = (bookId: string | undefined, enabled: boolea
         running: false,
       };
     };
-  }, [bookId, enabled]);
+  }, [bookId, enabled, readingMode]);
 };
 
 const isEditableSelectionTarget = (target: EventTarget | null): boolean => {
@@ -938,6 +981,7 @@ interface ReaderScrollContentProps {
   textSyntaxTree: TextSyntaxTree;
   titleId: number;
   bookId?: string;
+  allowAutoSave?: boolean;
   navigationRevision?: number;
   onNavigateTitle: (titleId: number) => void;
   progressLocator?: ReaderLocator;
@@ -2244,6 +2288,7 @@ const ReaderScrollContent = ({
   textSyntaxTree,
   titleId,
   bookId,
+  allowAutoSave = true,
   navigationRevision,
   onNavigateTitle,
   progressLocator,
@@ -2284,6 +2329,11 @@ const ReaderScrollContent = ({
   const previousTitleId = titleIds[currentTitleIndex - 1];
   const nextTitleId = titleIds[currentTitleIndex + 1];
   const blocks = useMemo(() => getChapterBlocks(textSyntaxTree, currentTitleId), [currentTitleId, textSyntaxTree]);
+  const isProgressWaitingForAnotherTitle =
+    !navigationRevision &&
+    Boolean(progressLocator?.blockId) &&
+    progressLocator?.titleId !== undefined &&
+    progressLocator.titleId !== currentTitleId;
   const annotationsByBlockId = useMemo(() => {
     const map = new Map<string, ReaderAnnotation[]>();
     annotations.forEach((annotation) => {
@@ -2335,7 +2385,7 @@ const ReaderScrollContent = ({
 
   const saveScrollLocator = useCallback(
     (anchorY?: number) => {
-      if (!bookId) return;
+      if (!bookId || !allowAutoSave || isProgressWaitingForAnotherTitle) return;
       const locator = createReaderScrollLocator({
         anchorY,
         bookId,
@@ -2365,7 +2415,7 @@ const ReaderScrollContent = ({
         );
       }
     },
-    [bookId, textSyntaxTree],
+    [allowAutoSave, bookId, isProgressWaitingForAnotherTitle, textSyntaxTree],
   );
 
   const saveScrollDefaultLocator = useCallback(() => {
@@ -2428,9 +2478,12 @@ const ReaderScrollContent = ({
       return;
     }
 
-    window.scrollTo({ behavior: 'auto', top: 0 });
+    if (!isProgressWaitingForAnotherTitle) {
+      window.scrollTo({ behavior: 'auto', top: 0 });
+    }
   }, [
     currentTitleId,
+    isProgressWaitingForAnotherTitle,
     navigationRevision,
     progressLocator?.blockId,
     progressLocator?.blockScrollRatio,
@@ -2464,13 +2517,13 @@ const ReaderScrollContent = ({
   }, []);
 
   useEffect(() => {
-    if (!bookId) return;
+    if (!bookId || !allowAutoSave || isProgressWaitingForAnotherTitle) return;
     const frame = window.requestAnimationFrame(saveScrollDefaultLocator);
     return () => window.cancelAnimationFrame(frame);
-  }, [bookId, currentTitleId, saveScrollDefaultLocator]);
+  }, [allowAutoSave, bookId, currentTitleId, isProgressWaitingForAnotherTitle, saveScrollDefaultLocator]);
 
   useEffect(() => {
-    if (!bookId) return;
+    if (!bookId || !allowAutoSave || isProgressWaitingForAnotherTitle) return;
     let timer: number | undefined;
 
     const scheduleSave = () => {
@@ -2491,7 +2544,7 @@ const ReaderScrollContent = ({
       window.removeEventListener('resize', scheduleSave);
       window.removeEventListener('pagehide', saveScrollDefaultLocator);
     };
-  }, [bookId, saveScrollDefaultLocator, saveScrollLocator]);
+  }, [allowAutoSave, bookId, isProgressWaitingForAnotherTitle, saveScrollDefaultLocator, saveScrollLocator]);
 
   const saveScrollDefaultLocatorRef = useRef(saveScrollDefaultLocator);
   saveScrollDefaultLocatorRef.current = saveScrollDefaultLocator;
@@ -3374,7 +3427,7 @@ export const DesktopBookDetail = (): React.JSX.Element => {
   const [pageTurnEffect, setPageTurnEffect] = useState<ReaderPageTurnEffect>(getStoredReaderPageTurnEffect);
   const [readingMode, setReadingMode] = useState<ReaderReadingMode>(getStoredReaderReadingMode);
   const [scrollPaddingX, setScrollPaddingX] = useState<number>(getStoredReaderScrollPaddingX);
-  const [scrollTitleId, setScrollTitleId] = useState(0);
+  const [scrollTitleId, setScrollTitleId] = useState<number | undefined>(undefined);
 
   const updateUI = useMemo(
     () =>
@@ -3497,7 +3550,12 @@ export const DesktopBookDetail = (): React.JSX.Element => {
 
   const isScrollMode = readingMode === 'scroll';
   const isReaderReady = textSyntaxTree.rawText.length > 0 && textSyntaxTree.blocks.length > 0;
-  useReaderReadingTimeTracker(id || undefined, isReaderReady);
+  useReaderReadingTimeTracker(id || undefined, isReaderReady, readingMode);
+  const initialScrollTitleId =
+    isScrollMode && isReaderReady ? getScrollInitialTitleId(id || undefined, pageNum, textSyntaxTree) : undefined;
+  const effectiveScrollTitleId = isValidTitleId(textSyntaxTree, scrollTitleId)
+    ? scrollTitleId
+    : (initialScrollTitleId ?? getFirstTitleId(textSyntaxTree));
   const hasKnownPagedTotalPage = textSyntaxTree.totalPage > 0 || textSyntaxTree.pageTitleId.length > 0;
   const isFirstPagedPage = pageNum <= 0;
   const isLastPagedPage =
@@ -3510,7 +3568,8 @@ export const DesktopBookDetail = (): React.JSX.Element => {
   const scrollNavigationTitleId = isValidTitleId(textSyntaxTree, readerNavigationTarget.titleId)
     ? readerNavigationTarget.titleId
     : scrollNavigationBlock?.titleId;
-  const hasActiveScrollNavigation = readerNavigationTarget.revision > 0 && scrollNavigationTitleId === scrollTitleId;
+  const hasActiveScrollNavigation =
+    readerNavigationTarget.revision > 0 && scrollNavigationTitleId === effectiveScrollTitleId;
   const scrollTargetBlockId = hasActiveScrollNavigation ? readerNavigationTarget.blockId : undefined;
   const scrollTargetBlockRatio =
     hasActiveScrollNavigation &&
@@ -3588,6 +3647,7 @@ export const DesktopBookDetail = (): React.JSX.Element => {
             }
           >
             <ReaderScrollContent
+              allowAutoSave={scrollTitleId === undefined || scrollTitleId === effectiveScrollTitleId}
               bookId={id || undefined}
               navigationRevision={hasActiveScrollNavigation ? readerNavigationTarget.revision : 0}
               onNavigateTitle={navigateScrollTitle}
@@ -3597,7 +3657,7 @@ export const DesktopBookDetail = (): React.JSX.Element => {
               targetPage={scrollTargetPage}
               targetBlockRatio={scrollTargetBlockRatio}
               textSyntaxTree={textSyntaxTree}
-              titleId={scrollTitleId}
+              titleId={effectiveScrollTitleId}
             />
           </div>
         </div>
@@ -3775,7 +3835,7 @@ export const MobileBookDetail = (): React.JSX.Element => {
   }, []);
 
   const isReaderReady = textSyntaxTree.rawText.length > 0 && textSyntaxTree.blocks.length > 0;
-  useReaderReadingTimeTracker(typeof id === 'string' ? id : undefined, isReaderReady);
+  useReaderReadingTimeTracker(typeof id === 'string' ? id : undefined, isReaderReady, 'paged');
 
   if (!isReaderReady) {
     return (

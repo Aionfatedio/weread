@@ -475,6 +475,13 @@ r-dropdown.ran-popover-dropdown {
   margin-top: 14px;
 }
 
+.reader-first-line-indent-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .reader-setting-option {
   min-width: 0;
   height: 46px;
