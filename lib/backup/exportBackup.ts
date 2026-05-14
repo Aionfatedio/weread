@@ -4,6 +4,7 @@ import { BACKUP_SCHEMA_VERSION } from '@/lib/backup/backupSchema';
 import { getAllReaderSettings } from '@/lib/readerSettingStore';
 import { getBookById } from '@/store/books';
 import { getReaderAnnotations } from '@/lib/readerAnnotations';
+import { getReaderBookStatusRecord } from '@/lib/readerBookStatus';
 import { getReaderProgress } from '@/lib/readerProgress';
 import { getReaderReadingTimeRecordsForBook, getReaderReadingTimeSummary } from '@/lib/readerReadingTime';
 import type {
@@ -30,7 +31,11 @@ const formatExportTime = (timestamp: number): string => {
 };
 
 const sanitizeFileName = (value: string): string => {
-  return (value.trim() || '未命名书籍').replace(/[<>:"/\\|?*\u0000-\u001f]/gu, '_').slice(0, 80);
+  const invalidChars = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*']);
+  return Array.from(value.trim() || '未命名书籍')
+    .map((char) => (invalidChars.has(char) || char.charCodeAt(0) < 32 ? '_' : char))
+    .join('')
+    .slice(0, 80);
 };
 
 const encodeResourcePath = (resourceKey: string): string => {
@@ -69,6 +74,7 @@ export const createSingleBookBackup = async ({
   const book = result.data;
   const createdAt = Date.now();
   const annotations = getReaderAnnotations(bookId);
+  const bookStatus = getReaderBookStatusRecord(bookId);
   const progress = getReaderProgress(bookId);
   const settings = await getAllReaderSettings();
   const readingTime = await getReaderReadingTimeRecordsForBook(bookId);
@@ -87,6 +93,7 @@ export const createSingleBookBackup = async ({
         id: book.id,
         progressUpdatedAt: progress?.updatedAt,
         readingTimeMs: readingTimeSummary.totalMs,
+        readingStatus: bookStatus?.status,
         sourceType: book.sourceType,
         title: book.title || '未命名书籍',
       },
@@ -96,6 +103,7 @@ export const createSingleBookBackup = async ({
     includes: {
       annotations: true,
       bookContent: includeBook,
+      bookStatus: true,
       progress: true,
       readingTime: true,
       resources: includeBook && resources.length > 0,
@@ -104,6 +112,7 @@ export const createSingleBookBackup = async ({
   };
   const userData: BackupUserDataPayload = {
     annotations,
+    bookStatus,
     progress,
     readingTimeDaily: readingTime.daily,
     readingTimeSegments: readingTime.segments,
@@ -120,6 +129,7 @@ export const createSingleBookBackup = async ({
     { data: jsonEntry(manifest), path: 'manifest.json' },
     { data: jsonEntry(createBookPayload(book, includeBook)), path: `books/${book.id}/book.json` },
     { data: jsonEntry(userData.annotations), path: 'user-data/annotations.json' },
+    { data: jsonEntry(userData.bookStatus || null), path: 'user-data/book-status.json' },
     { data: jsonEntry(userData.progress || null), path: 'user-data/progress.json' },
     { data: jsonEntry(userData.settings), path: 'user-data/settings.json' },
     { data: jsonEntry(userData.readingTimeDaily), path: 'user-data/reading-time-daily.json' },

@@ -1,10 +1,11 @@
 import { WebDB } from '@/lib/indexedDB';
 import { hydrateReaderAnnotations } from '@/lib/readerAnnotations';
+import { hydrateReaderBookStatus } from '@/lib/readerBookStatus';
 import { hydrateReaderProgress } from '@/lib/readerProgress';
 import { hydrateReaderReadingTime } from '@/lib/readerReadingTime';
 import { hydrateReaderSettings } from '@/lib/readerSettings';
 
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 
 export const db = new WebDB({ dbName: 'read', version: DATABASE_VERSION });
 
@@ -14,6 +15,7 @@ const hydrateReaderData = async (): Promise<void> => {
     hydrateReaderAnnotations(),
     hydrateReaderProgress(),
     hydrateReaderReadingTime(),
+    hydrateReaderBookStatus(),
   ]);
 };
 

@@ -1,11 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ComponentType, type SVGProps, useCallback, useEffect, useMemo, useState } from 'react';
 import type { BookInfo } from '@/store/books';
 import type { TextSyntaxTree } from '@/lib/transformText';
 import { BookCoverFallback } from '@/components/BookCard';
 import { ChevronDownIcon, ChevronUpIcon } from '@/components/Catalogue/BookDataPanelIcons';
 import { buildBookDataPanelData, getMonthBarWidth } from '@/components/Catalogue/bookDataPanelData';
+import { OcticonBookFinished, OcticonBookRead, OcticonBookReading } from '@/components/Octicon';
 import { createSingleBookBackup, downloadBlob } from '@/lib/backup/exportBackup';
 import { showGlobalFallback } from '@/lib/globalFallback';
+import {
+  type ReaderBookStatus,
+  getReaderBookStatus,
+  setReaderBookStatus,
+  useReaderBookStatusRevision,
+} from '@/lib/readerBookStatus';
 
 interface BookDataPanelProps {
   bookDetail: BookInfo | null;
@@ -20,6 +27,16 @@ interface BookDataPanelProps {
 
 const PANEL_MOTION_DURATION = 180;
 
+const READER_BOOK_STATUS_BUTTONS: Array<{
+  Icon: ComponentType<SVGProps<SVGSVGElement>>;
+  label: string;
+  status: ReaderBookStatus;
+}> = [
+  { Icon: OcticonBookReading, label: '在读', status: 'reading' },
+  { Icon: OcticonBookRead, label: '读过', status: 'read' },
+  { Icon: OcticonBookFinished, label: '读完', status: 'finished' },
+];
+
 export const BookDataPanel = ({
   bookDetail,
   coverFailed,
@@ -33,6 +50,7 @@ export const BookDataPanel = ({
   const [shouldRender, setShouldRender] = useState(open);
   const [expandedMonth, setExpandedMonth] = useState<number | null>(null);
   const [animateBars, setAnimateBars] = useState(true);
+  const statusRevision = useReaderBookStatusRevision();
 
   useEffect(() => {
     if (open) {
@@ -63,6 +81,7 @@ export const BookDataPanel = ({
     if (!shouldRender || !bookDetail) return null;
     return buildBookDataPanelData(bookDetail, textSyntaxTree);
   }, [bookDetail, revision, shouldRender, textSyntaxTree]);
+  const currentBookStatus = useMemo(() => getReaderBookStatus(bookDetail?.id), [bookDetail?.id, statusRevision]);
 
   useEffect(() => {
     if (!bookData) return;
@@ -78,6 +97,14 @@ export const BookDataPanel = ({
     setAnimateBars(false);
     window.setTimeout(() => setAnimateBars(true), 50);
   }, []);
+
+  const toggleBookStatus = useCallback(
+    (status: ReaderBookStatus) => {
+      if (!bookDetail?.id) return;
+      setReaderBookStatus(bookDetail.id, currentBookStatus === status ? undefined : status);
+    },
+    [bookDetail?.id, currentBookStatus],
+  );
 
   const exportCurrentBook = useCallback(
     (includeBook: boolean) => {
@@ -122,6 +149,23 @@ export const BookDataPanel = ({
                 {bookData.title}
               </h2>
               <div className="reader-catalog-data-muted mt-3 text-[13px]">上次阅读 · {bookData.lastRead}</div>
+              <div className="reader-catalog-data-status-group" aria-label="标记阅读状态">
+                {READER_BOOK_STATUS_BUTTONS.map(({ Icon, label, status }) => {
+                  const active = currentBookStatus === status;
+                  return (
+                    <button
+                      aria-pressed={active}
+                      className={`reader-catalog-data-status-button ${active ? 'is-active' : ''}`}
+                      key={status}
+                      type="button"
+                      onClick={() => toggleBookStatus(status)}
+                    >
+                      <Icon />
+                      <span>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
             <div className="reader-catalog-data-cover w-[72px] h-[100px] flex-shrink-0 rounded shadow-md overflow-hidden border">
               {coverUrl && !coverFailed ? (
@@ -171,7 +215,7 @@ export const BookDataPanel = ({
                 <div className="reader-catalog-data-label text-[13px] mb-1">累计时长</div>
                 <div className="flex items-baseline gap-[2px]">
                   <span className="reader-catalog-data-value text-[22px] font-bold">{bookData.totalDuration.hours}</span>
-                  <span className="reader-catalog-data-unit text-[12px] font-normal mr-1">小时</span>
+                  <span className="reader-catalog-data-unit text-[12px] font-normal mr-0.5">小时</span>
                   <span className="reader-catalog-data-value text-[22px] font-bold">
                     {bookData.totalDuration.minutes}
                   </span>
@@ -186,7 +230,7 @@ export const BookDataPanel = ({
                   <span className="reader-catalog-data-value text-[22px] font-bold">
                     {bookData.maxDailyDuration.hours}
                   </span>
-                  <span className="reader-catalog-data-unit text-[12px] font-normal mr-1">小时</span>
+                  <span className="reader-catalog-data-unit text-[12px] font-normal mr-0.5">小时</span>
                   <span className="reader-catalog-data-value text-[22px] font-bold">
                     {bookData.maxDailyDuration.minutes}
                   </span>

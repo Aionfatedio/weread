@@ -1071,9 +1071,7 @@ export const DesktopBookDetail = (): React.JSX.Element => {
 
   const toHome = () => {
     if (!id) return;
-    startSpaViewTransition(() => {
-      navigate(ROUTE_PATH.HOME);
-    });
+    navigate(ROUTE_PATH.HOME);
   };
 
   const toBookHome = () => {

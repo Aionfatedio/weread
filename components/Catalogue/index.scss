@@ -44,16 +44,20 @@
 .reader-catalog-data-title,
 .reader-catalog-data-value {
   color: var(--text-color-1);
+  margin-left: calc(var(--spacing) * 0.2);
+  margin-right: calc(var(--spacing) * 0.2);
 }
 
 .reader-catalog-data-muted,
 .reader-catalog-data-label,
 .reader-catalog-data-month-summary {
   color: var(--text-color-2);
+  font-weight: 500;
 }
 
 .reader-catalog-data-unit {
-  color: var(--text-color-2);
+  color: var(--text-color-1);
+  font-weight: 500;
 }
 
 .reader-catalog-data-subtle,
@@ -68,6 +72,51 @@
 
 .reader-catalog-data-card {
   background: var(--front-bg-color-2);
+}
+
+.reader-catalog-data-status-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.reader-catalog-data-status-button {
+  height: 44px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--front-bg-color-2);
+  color: var(--text-color-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.reader-catalog-data-status-button svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex: 0 0 auto;
+}
+
+.reader-catalog-data-status-button:hover {
+  background: color-mix(in srgb, var(--front-bg-color-2) 88%, var(--text-color-1));
+  color: var(--text-color-1);
+}
+
+.reader-catalog-data-status-button.is-active {
+  background: color-mix(in srgb, var(--brand-blue-color-1) 13%, var(--front-bg-color-2));
+  border-color: var(--brand-blue-color-1);
+  color: var(--brand-blue-color-1);
 }
 
 .reader-catalog-data-icon-button {

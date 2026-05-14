@@ -6,6 +6,7 @@ import {
   toBookResourceRecords,
 } from '@/lib/backup/backupSchema';
 import { restoreReaderAnnotationsForBook } from '@/lib/readerAnnotations';
+import { restoreReaderBookStatusForBook } from '@/lib/readerBookStatus';
 import { restoreReaderProgressForBook } from '@/lib/readerProgress';
 import { restoreReaderReadingTimeForBook } from '@/lib/readerReadingTime';
 import { restoreReaderSettings } from '@/lib/readerSettingStore';
@@ -51,6 +52,7 @@ export const parseBackupFile = async (file: File): Promise<ParsedBackupArchive> 
   const book = readJsonEntry<BackupBookPayload>(entries, `books/${manifestBook.id}/book.json`);
   const userData: BackupUserDataPayload = {
     annotations: readJsonEntry(entries, 'user-data/annotations.json', []),
+    bookStatus: readJsonEntry(entries, 'user-data/book-status.json', null) || undefined,
     progress: readJsonEntry(entries, 'user-data/progress.json', null) || undefined,
     readingTimeDaily: readJsonEntry(entries, 'user-data/reading-time-daily.json', []),
     readingTimeSegments: readJsonEntry(entries, 'user-data/reading-time-segments.json', []),
@@ -111,6 +113,10 @@ export const restoreBackupUserData = async ({
     restoreReaderProgressForBook({
       bookId: targetBookId,
       progress: archive.userData.progress,
+    }),
+    restoreReaderBookStatusForBook({
+      bookId: targetBookId,
+      status: archive.userData.bookStatus,
     }),
     restoreReaderReadingTimeForBook({
       bookId: targetBookId,

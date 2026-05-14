@@ -7,3 +7,5 @@ export const READER_SETTINGS_STORE_NAME = 'weread-reader-settings';
 export const READER_READING_TIME_SEGMENTS_STORE_NAME = 'weread-reader-reading-time-segments';
 
 export const READER_READING_TIME_DAILY_STORE_NAME = 'weread-reader-reading-time-daily';
+
+export const READER_BOOK_STATUS_STORE_NAME = 'weread-reader-book-status';

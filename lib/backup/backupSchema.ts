@@ -1,6 +1,7 @@
 import type { BookInfo } from '@/store/books';
 import type { BookResourceRecord } from '@/lib/bookResources';
 import type { ReaderAnnotation } from '@/lib/readerAnnotations';
+import type { ReaderBookStatus, ReaderBookStatusRecord } from '@/lib/readerBookStatus';
 import type { ReaderLocator } from '@/lib/readerProgress';
 import type { ReaderReadingTimeDailyAggregate, ReaderReadingTimeSegment } from '@/lib/readerReadingTime';
 
@@ -17,6 +18,7 @@ export interface BackupManifestBook {
   id: string;
   progressUpdatedAt?: number;
   readingTimeMs: number;
+  readingStatus?: ReaderBookStatus;
   sourceType: BookInfo['sourceType'];
   title: string;
 }
@@ -31,6 +33,7 @@ export interface BackupManifest {
   includes: {
     annotations: boolean;
     bookContent: boolean;
+    bookStatus: boolean;
     progress: boolean;
     readingTime: boolean;
     resources: boolean;
@@ -59,6 +62,7 @@ export interface BackupResourceManifestItem {
 
 export interface BackupUserDataPayload {
   annotations: ReaderAnnotation[];
+  bookStatus?: ReaderBookStatusRecord;
   progress?: ReaderLocator;
   readingTimeDaily: ReaderReadingTimeDailyAggregate[];
   readingTimeSegments: ReaderReadingTimeSegment[];

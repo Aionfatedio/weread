@@ -41,6 +41,7 @@ const DATABASE_STORES: Array<{
       { name: 'dayKey', keyPath: 'dayKey' },
     ],
   },
+  { name: 'weread-reader-book-status', options: { keyPath: 'bookId' } },
 ];
 
 export interface IDBResult<T = unknown> {

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { debounce } from 'ranuts/utils';
 import { BookCard, BookCoverFallback } from '@/components/BookCard';
@@ -34,12 +34,18 @@ import { getErrorMessage } from '@/lib/utils';
 import { showGlobalFallback } from '@/lib/globalFallback';
 import { clearChapterPaginationCache } from '@/lib/chapterPagination';
 import { Loading } from '@/components/Loading';
+import { FlyoutSelector, type FlyoutSelectorOption } from '@/components/FlyoutSelector';
 import {
   OcticonChevronRight as HomeArrowRightIcon,
   OcticonPlus as HomePlusIcon,
   OcticonSearch as HomeSearchIcon,
 } from '@/components/Octicon';
 import { t } from '@/locales';
+import {
+  type ReaderBookShelfStatus,
+  getReaderBookShelfStatus,
+  useReaderBookStatusRevision,
+} from '@/lib/readerBookStatus';
 import 'ranui/input';
 import './index.scss';
 
@@ -67,6 +73,22 @@ const BOOK_IMPORT_TIMEOUT_MS = 180_000;
 type ImportConflictType = 'missing-book' | 'restore-user-data' | 'same-book' | 'same-title';
 
 type ImportConflictAction = 'cancel' | 'keepBoth' | 'overwrite';
+
+type BookcaseFilterValue = ReaderBookShelfStatus | 'all';
+
+const BOOKCASE_FILTER_OPTIONS: Array<FlyoutSelectorOption<BookcaseFilterValue>> = [
+  { id: 'all', label: '全部' },
+  { id: 'unread', label: '未读' },
+  { id: 'reading', label: '在读' },
+  { id: 'read', label: '读过' },
+  { id: 'finished', label: '读完' },
+];
+
+let homeBookListCache: BookInfo[] | null = null;
+
+const writeHomeBookListCache = (books: BookInfo[]): void => {
+  homeBookListCache = books;
+};
 
 interface ImportConflictState {
   bookId: string;
@@ -427,7 +449,15 @@ interface HomeSearchState {
 }
 
 const useHomeBookList = (): { bookList: BookInfo[]; setBookList: React.Dispatch<React.SetStateAction<BookInfo[]>> } => {
-  const [bookList, setBookList] = useState<BookInfo[]>([]);
+  const hasCachedBookListRef = useRef(homeBookListCache !== null);
+  const [bookList, setRawBookList] = useState<BookInfo[]>(() => homeBookListCache || []);
+  const setBookList: React.Dispatch<React.SetStateAction<BookInfo[]>> = useCallback((value) => {
+    setRawBookList((previous) => {
+      const next = typeof value === 'function' ? value(previous) : value;
+      writeHomeBookListCache(next);
+      return next;
+    });
+  }, []);
 
   const loadBooks = useCallback(async () => {
     let attempts = 0;
@@ -447,6 +477,7 @@ const useHomeBookList = (): { bookList: BookInfo[]; setBookList: React.Dispatch<
   }, []);
 
   useEffect(() => {
+    if (hasCachedBookListRef.current) return;
     loadBooks();
   }, [loadBooks]);
 
@@ -1055,6 +1086,12 @@ export const DesktopHome = (): React.JSX.Element => {
   const { bookList, setBookList } = useHomeBookList();
   const searchState = useHomeSearch(inputRef);
   const { conflictState, onAdd, onCancelConflict, onConfirmConflict } = useHomeBookImport(bookList, setBookList);
+  const [filterValue, setFilterValue] = useState<BookcaseFilterValue>('all');
+  const statusRevision = useReaderBookStatusRevision();
+  const filteredBookList = useMemo(() => {
+    if (filterValue === 'all') return bookList;
+    return bookList.filter((book) => getReaderBookShelfStatus(book.id) === filterValue);
+  }, [bookList, filterValue, statusRevision]);
   useHomeNativeNavigation(searchResultRef);
 
   return (
@@ -1090,6 +1127,7 @@ export const DesktopHome = (): React.JSX.Element => {
                 style={{ width: 24, height: 24, color: 'var(--icon-color-1)' }}
               />
             </div>
+            <FlyoutSelector options={BOOKCASE_FILTER_OPTIONS} value={filterValue} onChange={setFilterValue} />
           </div>
           <div className="max-w-7xl mx-auto flex flex-row flex-wrap justify-start items-center">
             <ImportCard
@@ -1097,7 +1135,7 @@ export const DesktopHome = (): React.JSX.Element => {
               iconSize={64}
               onAdd={onAdd}
             />
-            {bookList.map((book) => (
+            {filteredBookList.map((book) => (
               <BookCard book={book} key={book.id} />
             ))}
           </div>
@@ -1114,6 +1152,12 @@ export const MobileHome = (): React.JSX.Element => {
   const { bookList, setBookList } = useHomeBookList();
   const searchState = useHomeSearch(inputRef);
   const { conflictState, onAdd, onCancelConflict, onConfirmConflict } = useHomeBookImport(bookList, setBookList);
+  const [filterValue, setFilterValue] = useState<BookcaseFilterValue>('all');
+  const statusRevision = useReaderBookStatusRevision();
+  const filteredBookList = useMemo(() => {
+    if (filterValue === 'all') return bookList;
+    return bookList.filter((book) => getReaderBookShelfStatus(book.id) === filterValue);
+  }, [bookList, filterValue, statusRevision]);
   useHomeNativeNavigation(searchResultRef);
 
   return (
@@ -1143,13 +1187,17 @@ export const MobileHome = (): React.JSX.Element => {
       )}
       {!searchState.searchValue && (
         <div className="px-5">
+          <div className="flex items-center justify-between pt-2">
+            <div className="text-text-color-1 text-xl font-medium">{t('my_bookcase')}</div>
+            <FlyoutSelector options={BOOKCASE_FILTER_OPTIONS} value={filterValue} onChange={setFilterValue} />
+          </div>
           <div className="flex flex-row flex-wrap justify-start items-center">
             <ImportCard
               className="w-24 h-36 bg-front-bg-color-3 p-5 cursor-pointer justify-center rounded-xl mr-6 items-center flex hover:scale-110 transition-all mt-5"
               iconSize={54}
               onAdd={onAdd}
             />
-            {bookList.map((book) => (
+            {filteredBookList.map((book) => (
               <BookCard book={book} key={book.id} />
             ))}
           </div>
