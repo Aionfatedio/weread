@@ -46,6 +46,9 @@ const READER_MOBILE_PANEL_DRAG_HANDLE_HEIGHT = 58;
 
 const READER_MOBILE_PANEL_CLOSE_RATIO = 0.5;
 
+const READER_MOBILE_PANEL_SCROLLABLE_SELECTOR =
+  '.reader-menu-scroll-area, .reader-note-panel-list, .reader-setting-control-panel-wrapper';
+
 export const BookDetailOperate = (): React.JSX.Element => {
   const controlsRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -306,6 +309,7 @@ export const MobileBookDetailOperate = (): React.JSX.Element => {
   const openPanelImmediately = useCallback(
     (panel: ReaderControlPanelType) => {
       clearPanelTimers();
+      setReaderControlPanelActive(true);
       touchStartYRef.current = null;
       touchDragEnabledRef.current = false;
       setPanelDragY(0);
@@ -395,27 +399,6 @@ export const MobileBookDetailOperate = (): React.JSX.Element => {
   }, [renderedPanel]);
 
   useEffect(() => {
-    if (!renderedPanel) return;
-    const { body, documentElement } = document;
-    const previousBodyOverflow = body.style.overflow;
-    const previousBodyOverscrollBehaviorY = body.style.overscrollBehaviorY;
-    const previousDocumentOverflow = documentElement.style.overflow;
-    const previousDocumentOverscrollBehaviorY = documentElement.style.overscrollBehaviorY;
-
-    body.style.overflow = 'hidden';
-    body.style.overscrollBehaviorY = 'none';
-    documentElement.style.overflow = 'hidden';
-    documentElement.style.overscrollBehaviorY = 'none';
-
-    return () => {
-      body.style.overflow = previousBodyOverflow;
-      body.style.overscrollBehaviorY = previousBodyOverscrollBehaviorY;
-      documentElement.style.overflow = previousDocumentOverflow;
-      documentElement.style.overscrollBehaviorY = previousDocumentOverscrollBehaviorY;
-    };
-  }, [renderedPanel]);
-
-  useEffect(() => {
     if (!renderedPanel || panelMotion !== 'enter') return;
     panelMotionTimerRef.current = window.setTimeout(() => {
       setPanelMotion('idle');
@@ -470,6 +453,16 @@ export const MobileBookDetailOperate = (): React.JSX.Element => {
     event.stopPropagation();
   };
 
+  const preventLayerScroll = (event: React.TouchEvent<HTMLDivElement> | React.WheelEvent<HTMLDivElement>) => {
+    event.stopPropagation();
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+  };
+
+  const isPanelScrollableTarget = (target: EventTarget | null): boolean =>
+    target instanceof Element && Boolean(target.closest(READER_MOBILE_PANEL_SCROLLABLE_SELECTOR));
+
   const onPanelTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
     event.stopPropagation();
     const clientY = event.touches[0]?.clientY;
@@ -487,7 +480,12 @@ export const MobileBookDetailOperate = (): React.JSX.Element => {
   const onPanelTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
     event.stopPropagation();
     const startY = touchStartYRef.current;
-    if (startY === null || !touchDragEnabledRef.current) return;
+    if (startY === null || !touchDragEnabledRef.current) {
+      if (!isPanelScrollableTarget(event.target) && event.cancelable) {
+        event.preventDefault();
+      }
+      return;
+    }
     if (event.cancelable) {
       event.preventDefault();
     }
@@ -537,7 +535,12 @@ export const MobileBookDetailOperate = (): React.JSX.Element => {
       </div>
 
       {renderedPanel ? (
-        <div className="reader-mobile-panel-layer" onClick={closeMobileChrome}>
+        <div
+          className="reader-mobile-panel-layer"
+          onClick={closeMobileChrome}
+          onTouchMove={preventLayerScroll}
+          onWheel={preventLayerScroll}
+        >
           <div
             className={`reader-mobile-control-panel ${isDraggingPanel ? 'is-dragging' : ''}`}
             data-motion={panelMotion}

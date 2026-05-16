@@ -13,6 +13,7 @@ import {
   EVENT_NAME,
   getCurrentBookDetail,
   getPageNum,
+  getReaderControlPanelActive,
   getReaderNavigationTarget,
   getReaderSearchHighlight,
   getTextSyntaxTree,
@@ -1481,6 +1482,7 @@ export const MobileBookDetail = (): React.JSX.Element => {
   useEffect(() => {
     if (readingMode !== 'scroll' || !isTouch) return;
     const hideVisibleChrome = () => {
+      if (getReaderControlPanelActive()) return;
       hideMobileChrome();
     };
     window.addEventListener('scroll', hideVisibleChrome, { passive: true });

@@ -211,9 +211,11 @@
   inset: 0 0 calc(var(--spacing) * 14);
   display: flex;
   align-items: flex-end;
+  background: transparent;
   pointer-events: auto;
   overflow: hidden;
   overscroll-behavior: contain;
+  touch-action: none;
 }
 
 .reader-mobile-control-panel {
@@ -230,6 +232,7 @@
   color: var(--text-color-1);
   overflow: hidden;
   overscroll-behavior: contain;
+  touch-action: pan-y;
   will-change: transform;
 }
 
@@ -380,6 +383,7 @@
 .reader-mobile-control-panel .reader-menu-scroll-area,
 .reader-mobile-control-panel .reader-note-panel-list {
   overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .reader-control-button r-icon {

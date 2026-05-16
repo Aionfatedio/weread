@@ -9,6 +9,7 @@ import {
 import type { TextSyntaxTree } from '@/lib/transformText';
 import {
   EVENT_NAME,
+  getReaderControlPanelActive,
   getReaderNavigationTarget,
   getReaderSearchHighlight,
   setReaderNavigationTarget,
@@ -190,7 +191,7 @@ export const ReaderScrollContent = ({
 
   const saveScrollLocator = useCallback(
     (anchorY?: number) => {
-      if (!bookId || !allowAutoSave || isProgressWaitingForAnotherTitle) return;
+      if (!bookId || !allowAutoSave || isProgressWaitingForAnotherTitle || getReaderControlPanelActive()) return;
       const locator = createReaderScrollLocator({
         anchorY,
         bookId,
