@@ -12,14 +12,10 @@
     <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license">
 </a>
 <a href="https://github.com/aionfatedio/weread">
-    <img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat" alt="PRs welcome!" />
-</a>
-<a href="https://github.com/aionfatedio/weread"><img src="https://img.shields.io/github/actions/workflow/status/ranuts/weread/ci.yml" alt="Build Status"></a>
-<a href="https://github.com/aionfatedio/weread">
-    <img src="https://img.shields.io/github/forks/ranuts/weread" alt="forks">
+    <img src="https://img.shields.io/github/forks/aionfatedio/weread" alt="forks">
 </a>
 <a href="https://github.com/aionfatedio/weread">
-    <img src="https://img.shields.io/github/stars/ranuts/weread" alt="stars">
+    <img src="https://img.shields.io/github/stars/aionfatedio/weread" alt="stars">
 </a>
 </p>
 <p align="center">
@@ -53,7 +49,7 @@ React 19 + Vite 7 + TypeScript + Tailwind CSS/SCSS
 
 书籍本体、EPUB 图片资源、阅读进度、笔记、书签、阅读设置、阅读时长和阅读状态保存在浏览器 IndexedDB 中。
 
-**注意：**清理浏览器站点数据会删除本地书籍和用户数据，建议定期导出备份。
+**注意：** 清理浏览器站点数据会删除本地书籍和用户数据，建议定期导出备份。
 
 ### 环境要求
 
