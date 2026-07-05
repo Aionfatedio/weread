@@ -2,7 +2,14 @@
 import type { CSSProperties, SyntheticEvent } from 'react';
 import { BookDetailMenu } from '@/components/DetailMenu';
 import { EVENT_NAME, setReaderControlPanelActive, syncHook } from '@/lib/subscribe';
-import { OcticonFont, OcticonMenu, OcticonMoon, OcticonNote, OcticonReadingMode, OcticonSun } from '@/components/Octicon';
+import {
+  OcticonFont,
+  OcticonMenu,
+  OcticonMoon,
+  OcticonNote,
+  OcticonReadingMode,
+  OcticonSun,
+} from '@/components/Octicon';
 import { ReaderFontControlPanel } from '@/components/DetailOperate/ReaderFontControlPanel';
 import { ReaderNotePanel } from '@/components/DetailOperate/ReaderNotePanel';
 import { ReaderControlPanelLayer } from '@/components/DetailOperate/ReaderControlPanelLayer';
@@ -114,9 +121,10 @@ export const BookDetailOperate = (): React.JSX.Element => {
   };
 
   useEffect(() => {
+    // The isPanelActive effect below owns resetting the global flag on
+    // unmount; this one only stops the pending close timer.
     return () => {
       clearPanelCloseTimer();
-      setReaderControlPanelActive(false);
     };
   }, [clearPanelCloseTimer]);
 
@@ -386,9 +394,10 @@ export const MobileBookDetailOperate = (): React.JSX.Element => {
   }, []);
 
   useEffect(() => {
+    // The renderedPanel effect below owns resetting the global flag on
+    // unmount; this one only stops the pending panel timers.
     return () => {
       clearPanelTimers();
-      setReaderControlPanelActive(false);
     };
   }, [clearPanelTimers]);
 

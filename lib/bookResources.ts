@@ -29,6 +29,10 @@ let resourceDBPromise: Promise<IDBDatabase> | null = null;
 
 const blobUrlCache = new Map<string, string>();
 const pendingRevoke: string[] = [];
+// Concurrent requests for the same key (e.g. StrictMode double-invoked
+// effects) must share one mint; two independent createObjectURL calls would
+// leak whichever URL loses the cache race.
+const inflightUrlRequests = new Map<string, Promise<string | undefined>>();
 
 const buildPrimaryKey = (bookId: string, resourceKey: string): string => `${bookId}\u0000${resourceKey}`;
 
@@ -76,7 +80,8 @@ interface PersistedRecord extends BookResourceRecord {
 export const persistBookResources = async (records: BookResourceRecord[]): Promise<void> => {
   if (records.length === 0) return;
   const store = await ensureWritable();
-  if (!store) return;
+  if (!store) throw new Error('Resource database unavailable');
+  const failures: string[] = [];
   await new Promise<void>((resolve) => {
     let pending = records.length;
     const onSettled = (): void => {
@@ -90,12 +95,25 @@ export const persistBookResources = async (records: BookResourceRecord[]): Promi
       };
       const request = store.put(persisted);
       request.onsuccess = onSettled;
-      request.onerror = onSettled;
+      request.onerror = (event) => {
+        // Without preventDefault a single failed put (quota, clone error)
+        // aborts the whole transaction and rolls back every record that DID
+        // succeed — one bad image would wipe all of the book's resources.
+        event.preventDefault();
+        failures.push(`${record.resourceKey}: ${request.error?.message || 'write failed'}`);
+        onSettled();
+      };
     });
   });
+  if (failures.length > 0) {
+    throw new Error(`Failed to persist ${failures.length}/${records.length} book resources (${failures[0]})`);
+  }
 };
 
-export const loadBookResource = async (bookId: string, resourceKey: string): Promise<BookResourceRecord | undefined> => {
+export const loadBookResource = async (
+  bookId: string,
+  resourceKey: string,
+): Promise<BookResourceRecord | undefined> => {
   try {
     const database = await openResourceDB();
     return await new Promise<BookResourceRecord | undefined>((resolve) => {
@@ -157,26 +175,33 @@ export const deleteBookResources = async (bookId: string): Promise<void> => {
   });
 };
 
-export const getBookResourceUrl = async (bookId: string, resourceKey: string): Promise<string | undefined> => {
+export const getBookResourceUrl = (bookId: string, resourceKey: string): Promise<string | undefined> => {
   const cacheKey = buildPrimaryKey(bookId, resourceKey);
   const cached = blobUrlCache.get(cacheKey);
   if (cached) {
     // LRU touch: re-insert so the most recently used url survives eviction.
     blobUrlCache.delete(cacheKey);
     blobUrlCache.set(cacheKey, cached);
-    return cached;
+    return Promise.resolve(cached);
   }
 
-  const record = await loadBookResource(bookId, resourceKey);
-  if (!record) return undefined;
-  // Drain stale URLs queued by earlier evictions before we mint a new one.
-  // By now any DOM references to those URLs will have re-rendered through
-  // the resolver hook and acquired a fresh URL.
-  drainPendingRevocations();
-  const url = URL.createObjectURL(record.blob);
-  blobUrlCache.set(cacheKey, url);
-  evictBlobUrlCacheIfNeeded();
-  return url;
+  const inflight = inflightUrlRequests.get(cacheKey);
+  if (inflight) return inflight;
+
+  const request = (async (): Promise<string | undefined> => {
+    const record = await loadBookResource(bookId, resourceKey);
+    if (!record) return undefined;
+    // Drain stale URLs queued by earlier evictions before we mint a new one.
+    // By now any DOM references to those URLs will have re-rendered through
+    // the resolver hook and acquired a fresh URL.
+    drainPendingRevocations();
+    const url = URL.createObjectURL(record.blob);
+    blobUrlCache.set(cacheKey, url);
+    evictBlobUrlCacheIfNeeded();
+    return url;
+  })().finally(() => inflightUrlRequests.delete(cacheKey));
+  inflightUrlRequests.set(cacheKey, request);
+  return request;
 };
 
 const drainPendingRevocations = (limit: number = PENDING_REVOKE_BATCH_SIZE): void => {

@@ -520,7 +520,9 @@
   gap: 12px;
   line-height: 24px;
   text-align: left;
-  transition: background-color 160ms ease, color 160ms ease;
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
 }
 
 .reader-menu-search-chapter-header:hover {
@@ -539,7 +541,9 @@
   flex: 0 0 auto;
   color: var(--icon-color-1);
   transform: rotate(0deg);
-  transition: transform 200ms ease, color 160ms ease;
+  transition:
+    transform 200ms ease,
+    color 160ms ease;
 }
 
 .reader-menu-search-chapter-header:hover .reader-menu-search-chapter-chevron {
@@ -1054,7 +1058,8 @@
     scrollbar-width: none;
   }
 
-  .reader-mobile-control-panel[data-reader-control-panel='setting'] .reader-setting-control-panel-wrapper::-webkit-scrollbar {
+  .reader-mobile-control-panel[data-reader-control-panel='setting']
+    .reader-setting-control-panel-wrapper::-webkit-scrollbar {
     display: none;
     width: 0;
     height: 0;

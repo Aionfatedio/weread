@@ -6,12 +6,7 @@ import { type NavigateFunction, useParams } from 'react-router-dom';
 import type React from 'react';
 import { OcticonChevronLeft, OcticonChevronRight } from '@/components/Octicon';
 import { ROUTE_PATH } from '@/router';
-import {
-  getCurrentBookDetail,
-  getTextSyntaxTree,
-  setCurrentBookDetail,
-  setTextSyntaxTree,
-} from '@/lib/subscribe';
+import { getCurrentBookDetail, getTextSyntaxTree, setCurrentBookDetail, setTextSyntaxTree } from '@/lib/subscribe';
 import { resumeDB } from '@/store';
 import { getBookById } from '@/store/books';
 import type { BookInfo } from '@/store/books';
@@ -28,13 +23,9 @@ export const useReaderBookId = (): string | undefined => {
   return bookId;
 };
 
-export const ReaderPagePreviousIcon = (): React.JSX.Element => (
-  <OcticonChevronLeft className="reader-page-nav-icon" />
-);
+export const ReaderPagePreviousIcon = (): React.JSX.Element => <OcticonChevronLeft className="reader-page-nav-icon" />;
 
-export const ReaderPageNextIcon = (): React.JSX.Element => (
-  <OcticonChevronRight className="reader-page-nav-icon" />
-);
+export const ReaderPageNextIcon = (): React.JSX.Element => <OcticonChevronRight className="reader-page-nav-icon" />;
 
 export const hasRecordChanged = (prev: Record<string, number>, next: Record<string, number>): boolean => {
   const prevKeys = Object.keys(prev);
@@ -72,11 +63,7 @@ export const runPageTurn = (effect: ReaderPageTurnEffect, update: () => void): v
 const LOAD_BOOK_DETAIL_MAX_RETRIES = 3;
 const LOAD_BOOK_DETAIL_RETRY_BASE_DELAY_MS = 200;
 
-export const loadBookDetailById = (
-  id: string | undefined,
-  navigate: NavigateFunction,
-  attempt: number = 0,
-): void => {
+export const loadBookDetailById = (id: string | undefined, navigate: NavigateFunction, attempt: number = 0): void => {
   if (!id) return;
   getBookById<BookInfo>(id)
     .then((res) => {
@@ -129,7 +116,7 @@ export const loadBookDetailById = (
       }
     })
     .catch((error) => {
-      console.log('error', error);
+      console.error('Failed to load book detail:', error);
       navigate(ROUTE_PATH.HOME, { replace: true });
     });
 };

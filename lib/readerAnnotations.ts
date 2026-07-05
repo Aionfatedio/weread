@@ -54,9 +54,6 @@ const DEFAULT_READER_STYLE_ANNOTATION_COLORS: Record<ReaderStyleAnnotationType, 
   wave: READER_ANNOTATION_COLORS[2],
 };
 
-// V2 stores annotation records in IndexedDB; the public store name intentionally has no version suffix.
-const ANNOTATION_STORAGE_KEY = 'weread-reader-annotations';
-
 const COLOR_STORAGE_KEY = 'weread-reader-annotation-color';
 
 const getColorStorageKey = (type?: ReaderStyleAnnotationType): string => {
@@ -84,12 +81,12 @@ const readAnnotationMap = (): Record<string, ReaderAnnotation[]> => annotationMa
 const persistAnnotation = (annotation: ReaderAnnotation): void => {
   void db.update<ReaderAnnotation>({
     data: annotation,
-    storeName: ANNOTATION_STORAGE_KEY,
+    storeName: READER_ANNOTATIONS_STORE_NAME,
   });
 };
 
 const deleteAnnotationRecord = (annotationId: string): void => {
-  void db.delete({ key: annotationId, storeName: ANNOTATION_STORAGE_KEY });
+  void db.delete({ key: annotationId, storeName: READER_ANNOTATIONS_STORE_NAME });
 };
 
 const emitAnnotationChange = (): void => {
@@ -158,7 +155,9 @@ export const deleteReaderAnnotationsForBook = async (bookId: string): Promise<vo
   delete map[bookId];
   writeAnnotationMap(map);
   emitAnnotationChange();
-  await Promise.all(list.map((annotation) => db.delete({ key: annotation.id, storeName: ANNOTATION_STORAGE_KEY })));
+  await Promise.all(
+    list.map((annotation) => db.delete({ key: annotation.id, storeName: READER_ANNOTATIONS_STORE_NAME })),
+  );
 };
 
 export const restoreReaderAnnotationsForBook = async ({
@@ -172,7 +171,9 @@ export const restoreReaderAnnotationsForBook = async ({
 }): Promise<void> => {
   const map = readAnnotationMap();
   const previous = map[bookId] || [];
-  await Promise.all(previous.map((annotation) => db.delete({ key: annotation.id, storeName: ANNOTATION_STORAGE_KEY })));
+  await Promise.all(
+    previous.map((annotation) => db.delete({ key: annotation.id, storeName: READER_ANNOTATIONS_STORE_NAME })),
+  );
 
   const nextAnnotations = annotations
     .filter((annotation) => annotation?.id && annotation.bookId === sourceBookId)
@@ -189,7 +190,7 @@ export const restoreReaderAnnotationsForBook = async ({
     nextAnnotations.map((annotation) =>
       db.update<ReaderAnnotation>({
         data: annotation,
-        storeName: ANNOTATION_STORAGE_KEY,
+        storeName: READER_ANNOTATIONS_STORE_NAME,
       }),
     ),
   );
@@ -380,7 +381,7 @@ export const getStoredReaderAnnotationColor = (type?: ReaderStyleAnnotationType)
   const defaultColor = getDefaultReaderAnnotationColor(type);
   const value = readCachedReaderSetting(getColorStorageKey(type));
   return READER_ANNOTATION_COLORS.includes(value as (typeof READER_ANNOTATION_COLORS)[number])
-    ? value || defaultColor
+    ? (value as string)
     : defaultColor;
 };
 

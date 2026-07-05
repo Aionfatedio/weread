@@ -1,6 +1,6 @@
 import type { BookInfo } from '@/store/books';
 import type { TextSyntaxTree } from '@/lib/transformText';
-import { t } from '@/locales';
+import { getActiveLocale, t } from '@/locales';
 import { getReaderProgress } from '@/lib/readerProgress';
 import { getReaderReadingTimeSummary } from '@/lib/readerReadingTime';
 
@@ -105,17 +105,17 @@ const getLocalDateFromDayKey = (dayKey: string): Date => {
 
 const formatMonthDay = (timestamp: number): string => {
   const date = new Date(timestamp);
-  return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'numeric' }).format(date);
+  return new Intl.DateTimeFormat(getActiveLocale(), { day: 'numeric', month: 'long' }).format(date);
 };
 
 const formatDayKeyMonth = (dayKey: string): string => {
   const date = getLocalDateFromDayKey(dayKey);
-  return new Intl.DateTimeFormat(undefined, { month: 'long' }).format(date);
+  return new Intl.DateTimeFormat(getActiveLocale(), { month: 'long' }).format(date);
 };
 
 const formatDayKeyDay = (dayKey: string): string => {
   const date = getLocalDateFromDayKey(dayKey);
-  return new Intl.DateTimeFormat(undefined, { day: 'numeric' }).format(date);
+  return new Intl.DateTimeFormat(getActiveLocale(), { day: 'numeric' }).format(date);
 };
 
 const formatLastRead = (timestamp?: number): string => {
@@ -128,9 +128,9 @@ const formatLastRead = (timestamp?: number): string => {
   if (dayDiff === 0) return t('common.today');
   if (dayDiff === 1) return t('common.yesterday');
   if (date.getFullYear() === today.getFullYear()) {
-    return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'numeric' }).format(date);
+    return new Intl.DateTimeFormat(getActiveLocale(), { day: 'numeric', month: 'long' }).format(date);
   }
-  return new Intl.DateTimeFormat(undefined, { day: 'numeric', month: 'numeric', year: 'numeric' }).format(date);
+  return new Intl.DateTimeFormat(getActiveLocale(), { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
 };
 
 const formatWordCount = (rawText: string): { unit: string; value: string } => {

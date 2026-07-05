@@ -6,7 +6,9 @@ import { hydrateReaderReadingTime } from '@/lib/readerReadingTime';
 import { hydrateReaderSettings } from '@/lib/readerSettings';
 import { terminateDBWorker } from '@/store/books';
 
-const DATABASE_VERSION = 3;
+// v4: adds the per-book chapter page-count store (paged-mode pagination
+// persistence). Existing stores/indexes are backfilled by onupgradeneeded.
+const DATABASE_VERSION = 4;
 
 export const db = new WebDB({ dbName: 'read', version: DATABASE_VERSION });
 
@@ -33,8 +35,15 @@ export const closeDB = (): void => {
 };
 
 export const resumeDB = (): Promise<boolean> => {
+  // Fast path: the connection is still healthy (the common visibilitychange
+  // case). Reopening + rehydrating here would race any in-flight persist —
+  // writes issued during the close/reopen window fail silently, then hydrate
+  // overwrites the in-memory caches with the stale on-disk values. Only
+  // rebuild when the connection was actually lost (pagehide closed it, the
+  // browser fired `close`, or a versionchange forced it shut).
+  if (db.database) return Promise.resolve(true);
   return db
-    .refreshDatabase()
+    .openDataBase()
     .then(async (result) => {
       if (result.status !== 'success') return false;
       await hydrateReaderData();

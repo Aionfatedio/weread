@@ -138,6 +138,9 @@ export const ReaderScrollContent = ({
   const copyToastTimerRef = useRef<number | null>(null);
   const consumedNavigationRevisionRef = useRef(0);
   const pinnedScrollTargetLocatorRef = useRef<ReaderLocator | null>(null);
+  // While set, late-loading images re-anchor the restored scroll position;
+  // any user interaction (wheel/touch/keys) cancels it.
+  const pendingImageRealignRef = useRef<{ align: 'anchor' | 'center'; blockId: string; ratio: number } | null>(null);
   const [copyToastVisible, setCopyToastVisible] = useState(false);
   const readerSearchHighlight = getReaderSearchHighlight();
   const searchKeyword = readerSearchHighlight.hasResult ? readerSearchHighlight.keyword : '';
@@ -231,6 +234,7 @@ export const ReaderScrollContent = ({
 
   const restoreScrollBlock = useCallback(
     (blockId: string, ratio: number, align: 'anchor' | 'center', onRestored?: () => void) => {
+      pendingImageRealignRef.current = { align, blockId, ratio };
       window.requestAnimationFrame(() => {
         const targetElement = contentRef.current?.querySelector<HTMLElement>(`[data-reader-block-id="${blockId}"]`);
         if (!targetElement) return;
@@ -286,6 +290,7 @@ export const ReaderScrollContent = ({
     }
 
     if (!isProgressWaitingForAnotherTitle) {
+      pendingImageRealignRef.current = null;
       window.scrollTo({ behavior: 'auto', top: 0 });
     }
   }, [
@@ -307,6 +312,7 @@ export const ReaderScrollContent = ({
   useEffect(() => {
     const clearPinnedLocator = () => {
       pinnedScrollTargetLocatorRef.current = null;
+      pendingImageRealignRef.current = null;
     };
     const clearPinnedLocatorByKey = (event: KeyboardEvent) => {
       if (['ArrowDown', 'ArrowUp', 'End', 'Home', 'PageDown', 'PageUp', ' '].includes(event.key)) {
@@ -372,17 +378,27 @@ export const ReaderScrollContent = ({
     };
   }, []);
 
+  // Paged mode gates pagination on image readiness; scroll mode instead
+  // re-anchors whenever a late image loads and shifts the document, until the
+  // user takes over scrolling.
+  const handleImageSettled = useCallback(() => {
+    const pending = pendingImageRealignRef.current;
+    if (!pending) return;
+    restoreScrollBlock(pending.blockId, pending.ratio, pending.align);
+  }, [restoreScrollBlock]);
+
   const renderedBlocks = useMemo(
     () =>
       blocks.map((block) =>
         renderReaderBlock(block, {
           annotations: annotationsByBlockId.get(block.id) || [],
           bookId,
+          onImageSettled: handleImageSettled,
           searchKeyword,
           shouldHighlight: Boolean(searchKeyword) && block.text.includes(searchKeyword),
         }),
       ),
-    [annotationsByBlockId, blocks, bookId, readerSearchHighlight.revision, searchKeyword],
+    [annotationsByBlockId, blocks, bookId, handleImageSettled, readerSearchHighlight.revision, searchKeyword],
   );
 
   return (

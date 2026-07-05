@@ -9,15 +9,7 @@ import globals from 'globals';
 
 export default tseslint.config(
   {
-    ignores: [
-      '**/dist/**',
-      '**/report/**',
-      '**/assets/**',
-      '**/temp/**',
-      '**/public/**',
-      '**/cache/**',
-      '**/*.snap',
-    ],
+    ignores: ['**/dist/**', '**/report/**', '**/assets/**', '**/temp/**', '**/public/**', '**/cache/**', '**/*.snap'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
@@ -33,6 +25,7 @@ export default tseslint.config(
       },
       globals: {
         ...globals.es2021,
+        ...globals.browser,
         ...globals.node,
       },
     },
@@ -44,7 +37,6 @@ export default tseslint.config(
       'n/no-exports-assign': 'error',
       'n/no-unpublished-bin': 'error',
       'n/no-unsupported-features/es-builtins': 'error',
-      'n/no-unsupported-features/node-builtins': 'error',
       'n/process-exit-as-throw': 'error',
       '@typescript-eslint/no-unused-expressions': 'off',
       '@typescript-eslint/no-namespace': 'off',
@@ -137,33 +129,10 @@ export default tseslint.config(
     },
   },
   {
-    name: 'disables/playground',
-    files: ['playground/**/*.?([cm])[jt]s?(x)', 'docs/**/*.?([cm])[jt]s?(x)'],
+    name: 'node-scripts',
+    files: ['scripts/**/*.?([cm])[jt]s', '*.config.[jt]s'],
     rules: {
-      'n/no-extraneous-import': 'off',
-      'n/no-extraneous-require': 'off',
-      'n/no-missing-import': 'off',
-      'n/no-missing-require': 'off',
-      'n/no-unsupported-features/es-builtins': 'off',
-      'n/no-unsupported-features/node-builtins': 'off',
-      '@typescript-eslint/explicit-module-boundary-types': 'off',
-      '@typescript-eslint/no-unused-expressions': 'off',
-      '@typescript-eslint/no-unused-vars': 'off',
-      'no-undef': 'off',
-      'no-empty': 'off',
-      'no-constant-condition': 'off',
-      '@typescript-eslint/no-empty-function': 'off',
-    },
-  },
-  {
-    name: 'disables/playground/tsconfig-json',
-    files: [
-      'playground/tsconfig-json/**/*.?([cm])[jt]s?(x)',
-      'playground/tsconfig-json-load-error/**/*.?([cm])[jt]s?(x)',
-    ],
-    ignores: ['**/__tests__/**'],
-    rules: {
-      '@typescript-eslint/ban-ts-comment': 'off',
+      'n/no-unsupported-features/node-builtins': 'error',
     },
   },
   {
@@ -182,27 +151,8 @@ export default tseslint.config(
     },
   },
   {
-    name: 'disables/test',
-    files: ['**/__tests__/**/*.?([cm])[jt]s?(x)'],
-    rules: {
-      'no-console': 'off',
-      '@typescript-eslint/ban-ts-comment': 'off',
-    },
-  },
-  {
     name: 'disables/typechecking',
-    files: [
-      '**/*.js',
-      '**/*.mjs',
-      '**/*.cjs',
-      '**/*.d.ts',
-      '**/*.d.cts',
-      '**/__tests__/**',
-      'docs/**',
-      'playground/**',
-      'scripts/**',
-      'vitest.config.ts',
-    ],
+    files: ['**/*.js', '**/*.mjs', '**/*.cjs', '**/*.d.ts', '**/*.d.cts', 'scripts/**'],
     languageOptions: {
       parserOptions: {
         project: false,

@@ -17,7 +17,28 @@
 .reader-user-select-disabled .readerControls,
 .reader-user-select-disabled .reader-page-title-label,
 .reader-user-select-disabled .reader-scroll-chapter-nav,
-.reader-user-select-disabled .reader-scroll-mode-header {
+.reader-user-select-disabled /* Long book titles must ellipsize instead of flex-squeezing the sibling
+   nav links (Home / My shelf) out of shape. */
+.reader-topbar-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  margin-right: 24px;
+}
+
+.reader-topbar-title a {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-topbar-links {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.reader-scroll-mode-header {
   -webkit-user-select: none;
   user-select: none;
 }
@@ -971,9 +992,9 @@
   margin: 0 0 var(--reader-paragraph-gap, 20px);
   orphans: 1;
   text-align: justify;
-  text-align-last: left;  
+  text-align-last: left;
   text-indent: var(--reader-paragraph-text-indent, 0);
-  text-justify: inter-ideograph; 
+  text-justify: inter-ideograph;
   white-space: pre-wrap;
   widows: 1;
   /* [特别标注] 当前阅读器会受到浏览器中文标点避头尾规则影响，导致某些情况下句尾会出现莫名换行，修复方式是无视此规则，增加下方一条CSS即可，默认无视 */

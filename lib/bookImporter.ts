@@ -1,7 +1,7 @@
 import { finalizeEpubResources, parseEpubToReaderDocument } from '@/lib/epubParser';
 import { createReader } from '@/lib/transformText';
 import { createReaderDocumentFromText } from '@/lib/readerDocument';
-import { sha256Hex } from '@/lib/utils';
+import { getFileExtension, sha256Hex } from '@/lib/utils';
 import type { BookResourceRecord } from '@/lib/bookResources';
 import type { ReaderBookDocument, ReaderBookSourceType } from '@/lib/readerDocument';
 
@@ -19,11 +19,6 @@ export interface ImportedBookData {
 interface ImportBookOptions {
   signal?: AbortSignal;
 }
-
-const getFileExtension = (file: File): string => {
-  const index = file.name.lastIndexOf('.');
-  return index === -1 ? '' : file.name.slice(index + 1).toLowerCase();
-};
 
 export const isSupportedBookFile = (file: File): boolean => {
   return ['epub', 'txt'].includes(getFileExtension(file));

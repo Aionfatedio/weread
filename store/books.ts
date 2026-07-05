@@ -1,5 +1,6 @@
 import { db } from '@/store/index';
 import { deleteBookResources, persistBookResources, releaseBookResourceUrls } from '@/lib/bookResources';
+import { BOOKS_INFO_STORE_NAME } from '@/lib/readerStoreNames';
 import { createRandomId, getErrorMessage, sha256Hex } from '@/lib/utils';
 import type { BookResourceRecord } from '@/lib/bookResources';
 import type { IDBResult } from '@/lib/indexedDB';
@@ -20,8 +21,6 @@ export interface BookInfo {
 export interface SearchResult extends BookInfo {
   matchedText: string[];
 }
-
-const STORE_NAME_BOOKS_INFO_KEY = 'books_info';
 
 const FINGERPRINT_SAMPLE_SIZE = 4096;
 
@@ -68,10 +67,7 @@ const errorResult = <T>(message: string, fallback?: T): IDBResult<T> => ({
 });
 
 let dbWorker: Worker | null = null;
-const pendingWorkerOperations = new Map<
-  string,
-  { resolve: (result: IDBResult<unknown>) => void; timer: number }
->();
+const pendingWorkerOperations = new Map<string, { resolve: (result: IDBResult<unknown>) => void; timer: number }>();
 
 interface WorkerResponseEnvelope<T> extends IDBResult<T> {
   operationId: string;
@@ -90,11 +86,26 @@ const handleWorkerMessage = (event: MessageEvent<WorkerResponseEnvelope<unknown>
 
 const handleWorkerError = (event: ErrorEvent): void => {
   const message = event.message || 'Worker error';
+  // The worker instance is broken (script failed to load, or an uncaught
+  // error killed its message loop). Discard it so the next operation spawns
+  // a fresh one instead of queueing 60s timeouts against a dead worker.
+  resetDBWorker();
   for (const [, pending] of pendingWorkerOperations) {
     clearTimeout(pending.timer);
     pending.resolve(errorResult(message));
   }
   pendingWorkerOperations.clear();
+};
+
+const handleWorkerMessageError = (): void => {
+  handleWorkerError(new ErrorEvent('messageerror', { message: 'Worker message deserialization failed' }));
+};
+
+const resetDBWorker = (): void => {
+  if (dbWorker) {
+    dbWorker.terminate();
+    dbWorker = null;
+  }
 };
 
 const getDBWorker = (): Worker => {
@@ -103,16 +114,14 @@ const getDBWorker = (): Worker => {
       type: 'module',
     });
     dbWorker.addEventListener('message', handleWorkerMessage);
+    dbWorker.addEventListener('messageerror', handleWorkerMessageError);
     dbWorker.addEventListener('error', handleWorkerError);
   }
   return dbWorker;
 };
 
 export const terminateDBWorker = (): void => {
-  if (dbWorker) {
-    dbWorker.terminate();
-    dbWorker = null;
-  }
+  resetDBWorker();
   for (const [, pending] of pendingWorkerOperations) {
     clearTimeout(pending.timer);
     pending.resolve(errorResult('Worker terminated'));
@@ -135,6 +144,9 @@ const performWorkerOperation = <T = unknown>(
 
     const timer = window.setTimeout(() => {
       if (!pendingWorkerOperations.delete(operationId)) return;
+      // A hung worker would stall every subsequent operation for the full
+      // timeout as well; replace it so the next call starts clean.
+      resetDBWorker();
       resolve(errorResult<T>('Worker operation timed out'));
     }, PENDING_OPERATION_TIMEOUT_MS);
 
@@ -148,7 +160,7 @@ const performWorkerOperation = <T = unknown>(
         type,
         data,
         dbName: db.database.name,
-        storeName: STORE_NAME_BOOKS_INFO_KEY,
+        storeName: BOOKS_INFO_STORE_NAME,
         operationId,
       });
     } catch (error) {
@@ -157,6 +169,27 @@ const performWorkerOperation = <T = unknown>(
       resolve(errorResult<T>(getErrorMessage(error, 'Failed to dispatch worker message')));
     }
   });
+};
+
+// The worker strips `document` down to `{ version }` before echoing a stored
+// book back (the full text/chapters stay in IndexedDB); mirror that projection
+// when answering from an already-stored record.
+const toExistingBookResult = (existing: BookInfo): IDBResult<BookInfo> => {
+  const { id, title, author, image, sourceType, fingerprint, createTime, modifyTime } = existing;
+  return successResult(
+    {
+      id,
+      title,
+      author,
+      image,
+      sourceType,
+      fingerprint,
+      createTime,
+      modifyTime,
+      document: { version: 1 } as ReaderBookDocument,
+    },
+    { reason: BOOK_STORE_RESULT_REASON.BOOK_ALREADY_EXISTS },
+  );
 };
 
 export const addBook = async (data: {
@@ -186,29 +219,7 @@ export const addBook = async (data: {
 
   const existing = await getBookById<BookInfo>(id);
   if (!overwrite && !existing.error && existing.data) {
-    const {
-      id: existingId,
-      title: existingTitle,
-      author: existingAuthor,
-      image: existingImage,
-      sourceType: existingSourceType,
-      createTime,
-      modifyTime,
-    } = existing.data;
-    return successResult(
-      {
-        id: existingId,
-        title: existingTitle,
-        author: existingAuthor,
-        image: existingImage,
-        sourceType: existingSourceType,
-        fingerprint: existing.data.fingerprint,
-        createTime,
-        modifyTime,
-        document: { version: 1 } as ReaderBookDocument,
-      },
-      { reason: BOOK_STORE_RESULT_REASON.BOOK_ALREADY_EXISTS },
-    );
+    return toExistingBookResult(existing.data);
   }
 
   const now = Date.now();
@@ -246,29 +257,17 @@ export const addBook = async (data: {
     // Race condition: another import added the same book between our get and add.
     const conflict = await getBookById<BookInfo>(id);
     if (!conflict.error && conflict.data) {
-      const {
-        id: conflictId,
-        title: conflictTitle,
-        author: conflictAuthor,
-        image: conflictImage,
-        sourceType: conflictSourceType,
-        createTime,
-        modifyTime,
-      } = conflict.data;
-      return successResult(
-        {
-          id: conflictId,
-          title: conflictTitle,
-          author: conflictAuthor,
-          image: conflictImage,
-          sourceType: conflictSourceType,
-          fingerprint: conflict.data.fingerprint,
-          createTime,
-          modifyTime,
-          document: { version: 1 } as ReaderBookDocument,
-        },
-        { reason: BOOK_STORE_RESULT_REASON.BOOK_ALREADY_EXISTS },
-      );
+      return toExistingBookResult(conflict.data);
+    }
+    // Genuine failure with no book on record: remove the resources persisted
+    // above so they don't linger as unreachable orphans.
+    if (resources.length > 0) {
+      releaseBookResourceUrls(id);
+      try {
+        await deleteBookResources(id);
+      } catch (error) {
+        console.error('Failed to clean up orphaned book resources:', getErrorMessage(error));
+      }
     }
     return addResult;
   }

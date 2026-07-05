@@ -21,8 +21,8 @@ export default defineConfig({
     target: 'esnext',
     // Split vendor code into stable chunks so user code changes do not bust
     // the long-cached library bundles. Keep heavy / optional libs (flexsearch,
-    // jschardet, lit) in their own chunks so they download lazily with the
-    // routes that need them.
+    // jschardet) in their own chunks so they download lazily with the routes
+    // that need them.
     rollupOptions: {
       output: {
         manualChunks(id: string): string | undefined {
@@ -33,7 +33,6 @@ export default defineConfig({
           if (id.includes('scheduler')) return 'vendor-react';
           if (id.includes('flexsearch')) return 'vendor-flexsearch';
           if (id.includes('jschardet')) return 'vendor-jschardet';
-          if (id.includes('lit') || id.includes('@khmyznikov/pwa-install')) return 'vendor-pwa';
           if (id.includes('ranui') || id.includes('ranuts')) return 'vendor-ranui';
           return 'vendor';
         },
@@ -54,12 +53,5 @@ export default defineConfig({
       '@/locales': resolve(__dirname, 'locales'),
     },
     extensions: ['.mjs', '.js', '.ts', '.jsx', '.tsx', '.json'],
-  },
-  css: {
-    preprocessorOptions: {
-      scss: {
-        additionalData: `@import "@/styles/base.css";`,
-      },
-    },
   },
 });

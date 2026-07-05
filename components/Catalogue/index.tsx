@@ -124,9 +124,11 @@ export const Catalogue = (): React.JSX.Element => {
   }, [currentTitleId]);
 
   useEffect(() => {
-    scrollRef.current?.addEventListener('click', turnToCatalogueTitle);
+    const container = scrollRef.current;
+    if (!container) return;
+    container.addEventListener('click', turnToCatalogueTitle);
     return () => {
-      scrollRef.current?.removeEventListener('click', turnToCatalogueTitle);
+      container.removeEventListener('click', turnToCatalogueTitle);
     };
   }, []);
 

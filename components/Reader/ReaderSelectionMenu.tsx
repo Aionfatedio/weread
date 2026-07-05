@@ -101,7 +101,10 @@ export const ReaderSelectionMenu = ({
     if (!currentState) return;
 
     const copyFromKeyboard = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'c') return;
+      // Plain Ctrl/Cmd+C only — combos like Ctrl+Shift+C (devtools) or
+      // Ctrl+Alt+C must pass through untouched.
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || event.key.toLowerCase() !== 'c')
+        return;
       if (isEditableSelectionTarget(event.target)) return;
 
       event.preventDefault();
@@ -295,7 +298,9 @@ export const ReaderCopyToast = ({
   visible: boolean;
 }): React.JSX.Element | null => {
   if (!visible) return null;
-  return <div className={`reader-copy-toast ${placement === 'center' ? 'is-center' : ''}`}>{t('selection.copied')}</div>;
+  return (
+    <div className={`reader-copy-toast ${placement === 'center' ? 'is-center' : ''}`}>{t('selection.copied')}</div>
+  );
 };
 
 export const ReaderNoteModal = ({ state, onCancel, onSave }: ReaderNoteModalProps): React.JSX.Element | null => {

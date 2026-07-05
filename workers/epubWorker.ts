@@ -53,9 +53,7 @@ const normalizePath = (value: string): string => {
   return parts.join('/');
 };
 
-// ZIP spec hard limits. 0xffff is the maximum entry count for ZIP v2 (without
-// ZIP64); anything beyond that is either truncated or malicious.
-const MAX_ZIP_ENTRIES = 0xffff;
+// ZIP spec constants for the fixed-size portions of each record.
 const EOCD_SIGNATURE_SIZE = 22;
 const CENTRAL_DIRECTORY_HEADER_FIXED_SIZE = 46;
 const LOCAL_FILE_HEADER_FIXED_SIZE = 30;
@@ -75,12 +73,11 @@ const findEocd = (view: DataView): number => {
 const parseZipEntries = (bytes: Uint8Array): ZipEntry[] => {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const eocdOffset = findEocd(view);
+  // entryCount comes from a uint16, so it can never exceed the ZIP v2 limit
+  // of 0xffff — no upper-bound check needed here.
   const entryCount = getUint16(view, eocdOffset + 10);
   const centralDirectoryOffset = getUint32(view, eocdOffset + 16);
 
-  if (entryCount > MAX_ZIP_ENTRIES) {
-    throw new Error(`Invalid EPUB: entry count ${entryCount} exceeds ZIP limit.`);
-  }
   if (centralDirectoryOffset >= view.byteLength) {
     throw new Error('Invalid EPUB: central directory offset is out of range.');
   }
@@ -139,14 +136,14 @@ const inflateWith = async (bytes: Uint8Array, format: 'deflate' | 'deflate-raw')
   // intermediate Blob copy that the previous `new Blob([bytes]).stream()`
   // implementation performed, which mattered for large EPUBs with many
   // entries.
-   
+
   const source = new ReadableStream({
     start(controller) {
       controller.enqueue(bytes);
       controller.close();
     },
   });
-   
+
   const stream = source.pipeThrough(new DecompressionStream(format));
   return new Uint8Array(await new Response(stream).arrayBuffer());
 };

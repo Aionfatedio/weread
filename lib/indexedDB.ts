@@ -6,6 +6,16 @@
 // 指针：IDBCursor 对象
 // 主键集合：IDBKeyRange 对象，主键是默认建立索引的属性，可以取当前层级的某个属性，也可以指定下一层对象的属性，还可以是一个递增的整数
 
+import {
+  BOOKS_INFO_STORE_NAME,
+  CHAPTER_PAGE_COUNTS_STORE_NAME,
+  READER_ANNOTATIONS_STORE_NAME,
+  READER_BOOK_STATUS_STORE_NAME,
+  READER_PROGRESS_STORE_NAME,
+  READER_READING_TIME_DAILY_STORE_NAME,
+  READER_READING_TIME_SEGMENTS_STORE_NAME,
+  READER_SETTINGS_STORE_NAME,
+} from '@/lib/readerStoreNames';
 import { getErrorMessage } from '@/lib/utils';
 
 const DATABASE_STORES: Array<{
@@ -13,19 +23,19 @@ const DATABASE_STORES: Array<{
   options: IDBObjectStoreParameters;
   indexes?: Array<{ name: string; keyPath: string | string[]; options?: IDBIndexParameters }>;
 }> = [
-  { name: 'books_info', options: { keyPath: 'id' } },
+  { name: BOOKS_INFO_STORE_NAME, options: { keyPath: 'id' } },
   {
-    name: 'weread-reader-annotations',
+    name: READER_ANNOTATIONS_STORE_NAME,
     options: { keyPath: 'id' },
     indexes: [
       { name: 'bookId', keyPath: 'bookId' },
       { name: 'type', keyPath: 'type' },
     ],
   },
-  { name: 'weread-reader-progress', options: { keyPath: 'bookId' } },
-  { name: 'weread-reader-settings', options: { keyPath: 'key' } },
+  { name: READER_PROGRESS_STORE_NAME, options: { keyPath: 'bookId' } },
+  { name: READER_SETTINGS_STORE_NAME, options: { keyPath: 'key' } },
   {
-    name: 'weread-reader-reading-time-segments',
+    name: READER_READING_TIME_SEGMENTS_STORE_NAME,
     options: { keyPath: 'id' },
     indexes: [
       { name: 'bookId', keyPath: 'bookId' },
@@ -34,24 +44,28 @@ const DATABASE_STORES: Array<{
     ],
   },
   {
-    name: 'weread-reader-reading-time-daily',
+    name: READER_READING_TIME_DAILY_STORE_NAME,
     options: { keyPath: 'id' },
     indexes: [
       { name: 'bookId', keyPath: 'bookId' },
       { name: 'dayKey', keyPath: 'dayKey' },
     ],
   },
-  { name: 'weread-reader-book-status', options: { keyPath: 'bookId' } },
+  { name: READER_BOOK_STATUS_STORE_NAME, options: { keyPath: 'bookId' } },
+  {
+    name: CHAPTER_PAGE_COUNTS_STORE_NAME,
+    options: { keyPath: 'key' },
+    indexes: [{ name: 'bookId', keyPath: 'bookId' }],
+  },
 ];
 
 export interface IDBResult<T = unknown> {
-  status: 'success' | 'error' | 'pending';
+  status: 'success' | 'error';
   code: number;
   data: T;
   error: boolean;
   message?: string;
   reason?: string;
-  progress?: number;
 }
 
 const errorResult = <T = unknown>(message: string, data?: T): IDBResult<T> => ({
@@ -69,13 +83,6 @@ const successResult = <T = unknown>(data: T): IDBResult<T> => ({
   error: false,
 });
 
-const extractVersion = (message: string): number | undefined => {
-  const match = /existing version \((\d+)\)/u.exec(message);
-  if (!match) return undefined;
-  const value = Number(match[1]);
-  return Number.isFinite(value) ? value : undefined;
-};
-
 export class WebDB {
   database?: IDBDatabase;
   version: number;
@@ -84,37 +91,65 @@ export class WebDB {
     this.dbName = dbName;
     this.version = version || 1;
   }
-  openDataBase = (): Promise<IDBResult<{ db: IDBDatabase }>> => {
+  openDataBase = (options: { useExistingVersion?: boolean } = {}): Promise<IDBResult<{ db: IDBDatabase }>> => {
     return new Promise<IDBResult<{ db: IDBDatabase }>>((resolve) => {
-      const request = indexedDB.open(this.dbName, this.version);
+      // Opening without an explicit version connects at whatever version is on
+      // disk — the recovery path when the stored version is newer than ours.
+      const request = options.useExistingVersion
+        ? indexedDB.open(this.dbName)
+        : indexedDB.open(this.dbName, this.version);
       request.onsuccess = () => {
         this.database = request.result;
         this.version = this.database.version;
+        // If another tab (or a future release) upgrades the schema, close our
+        // connection so the upgrade can proceed; the next operation reopens
+        // via resumeDB. Same for browser-initiated closes (storage pressure).
+        this.database.onversionchange = () => this.closeDataBase();
+        this.database.onclose = () => {
+          this.database = undefined;
+        };
         resolve(successResult({ db: this.database }));
       };
       request.onerror = () => {
         const message = request.error?.message || 'open database error';
-        if (request.error?.name === 'VersionError') {
-          const existVersion = extractVersion(message);
-          if (existVersion !== undefined && existVersion > this.version) {
-            this.version = existVersion;
-            this.refreshDatabase().then(resolve).catch((error: IDBResult<{ db: IDBDatabase }>) => {
-              resolve(error);
-            });
-            return;
-          }
+        if (request.error?.name === 'VersionError' && !options.useExistingVersion) {
+          // The on-disk database is newer than this build expects (e.g. a
+          // rollback, or an old tab running stale JS). Reopen at the existing
+          // version instead of parsing browser-specific error text.
+          this.openDataBase({ useExistingVersion: true }).then(resolve);
+          return;
         }
         resolve(errorResult<{ db: IDBDatabase }>(message, undefined as unknown as { db: IDBDatabase }));
+      };
+      request.onblocked = () => {
+        // Another tab holds an older connection and refuses to close. Surface
+        // the failure instead of hanging initDB forever; if the other tab
+        // closes later, onsuccess still fires and caches the connection for
+        // the next resumeDB.
+        resolve(
+          errorResult<{ db: IDBDatabase }>(
+            'database upgrade blocked by another tab',
+            undefined as unknown as { db: IDBDatabase },
+          ),
+        );
       };
       request.onupgradeneeded = () => {
         this.database = request.result;
         this.version = this.database.version;
-        // 在这里创建 ObjectStore
+        const upgradeTransaction = request.transaction;
         DATABASE_STORES.forEach((storeConfig) => {
-          if (!this.database || this.database.objectStoreNames.contains(storeConfig.name)) return;
-          const store = this.database.createObjectStore(storeConfig.name, storeConfig.options);
+          if (!this.database) return;
+          // Create missing stores, and backfill missing indexes on stores that
+          // already exist — `contains` alone would silently skip new indexes
+          // added to an existing store in a later schema version.
+          const store = this.database.objectStoreNames.contains(storeConfig.name)
+            ? upgradeTransaction?.objectStore(storeConfig.name)
+            : this.database.createObjectStore(storeConfig.name, storeConfig.options);
+          if (!store) return;
           storeConfig.indexes?.forEach((index) => {
-            store.createIndex(index.name, index.keyPath, index.options);
+            if (!store.indexNames.contains(index.name)) {
+              store.createIndex(index.name, index.keyPath, index.options);
+            }
           });
         });
       };
@@ -123,13 +158,6 @@ export class WebDB {
   closeDataBase = (): void => {
     this.database?.close();
     this.database = undefined;
-  };
-  deleteDatabase = ({ dbName }: { dbName: string }): Promise<IDBResult> => {
-    return new Promise<IDBResult>((resolve) => {
-      const request = indexedDB.deleteDatabase(dbName);
-      request.onsuccess = () => resolve(successResult(null));
-      request.onerror = () => resolve(errorResult(request.error?.message || 'delete database error', null));
-    });
   };
   getObjectStore(storeName: string, mode: IDBTransactionMode = 'readonly'): IDBObjectStore | undefined {
     if (!this.database) {
@@ -144,53 +172,30 @@ export class WebDB {
       return undefined;
     }
   }
-  createObjectStore = ({ storeName, options }: { storeName: string; options: IDBObjectStoreParameters }): void => {
-    if (this.database?.objectStoreNames.contains(storeName)) return;
-    this.database?.createObjectStore(storeName, options);
-  };
-  refreshDatabase = (): Promise<IDBResult<{ db: IDBDatabase }>> => {
-    this.closeDataBase();
-    return this.openDataBase();
-  };
-  createObjectStoreIndex = ({
-    storeName,
-    indexName,
-    keyPath,
-    options,
-  }: {
-    storeName: string;
-    indexName: string;
-    keyPath: string | string[];
-    options?: IDBIndexParameters;
-  }): void => {
-    const store = this.getObjectStore(storeName);
-    store?.createIndex(indexName, keyPath, options);
-  };
   add = <T = unknown>({ storeName, data }: { storeName: string; data: T }): Promise<IDBResult<T>> => {
     return new Promise<IDBResult<T>>((resolve) => {
-      const store = this.getObjectStore(storeName, 'readwrite');
-      if (!store) return resolve(errorResult<T>('Database not initialized', undefined as T));
-      const request = store.add(data);
-      request.onsuccess = () => resolve(successResult(data));
-      request.onerror = () => resolve(errorResult<T>(request.error?.message || 'add error', undefined as T));
+      try {
+        const store = this.getObjectStore(storeName, 'readwrite');
+        if (!store) return resolve(errorResult<T>('Database not initialized', undefined as T));
+        const request = store.add(data);
+        request.onsuccess = () => resolve(successResult(data));
+        request.onerror = () => resolve(errorResult<T>(request.error?.message || 'add error', undefined as T));
+      } catch (error) {
+        resolve(errorResult<T>(getErrorMessage(error, 'add error'), undefined as T));
+      }
     });
   };
   update = <T = unknown>({ storeName, data }: { storeName: string; data: T }): Promise<IDBResult<null>> => {
     return new Promise<IDBResult<null>>((resolve) => {
-      const store = this.getObjectStore(storeName, 'readwrite');
-      if (!store) return resolve(errorResult('Database not initialized', null));
-      const request = store.put(data);
-      request.onsuccess = () => resolve(successResult(null));
-      request.onerror = () => resolve(errorResult(request.error?.message || 'update error', null));
-    });
-  };
-  readByKey = <T = unknown>({ storeName, key }: { storeName: string; key: IDBValidKey }): Promise<IDBResult<T>> => {
-    return new Promise<IDBResult<T>>((resolve) => {
-      const store = this.getObjectStore(storeName);
-      if (!store) return resolve(errorResult<T>('Database not initialized', undefined as T));
-      const request = store.get(key);
-      request.onsuccess = () => resolve(successResult(request.result as T));
-      request.onerror = () => resolve(errorResult<T>(request.error?.message || 'read error', undefined as T));
+      try {
+        const store = this.getObjectStore(storeName, 'readwrite');
+        if (!store) return resolve(errorResult('Database not initialized', null));
+        const request = store.put(data);
+        request.onsuccess = () => resolve(successResult(null));
+        request.onerror = () => resolve(errorResult(request.error?.message || 'update error', null));
+      } catch (error) {
+        resolve(errorResult(getErrorMessage(error, 'update error'), null));
+      }
     });
   };
   readByCursor = <T = unknown>({
@@ -205,21 +210,27 @@ export class WebDB {
     direction?: IDBCursorDirection;
   }): Promise<IDBResult<T[]>> => {
     return new Promise<IDBResult<T[]>>((resolve) => {
-      const store = this.getObjectStore(storeName);
-      if (!store) return resolve(errorResult<T[]>('Database not initialized', []));
-      const source: IDBObjectStore | IDBIndex = indexName ? store.index(indexName) : store;
-      const request = source.openCursor(keyRange, direction);
       const result: T[] = [];
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (cursor) {
-          result.push(cursor.value as T);
-          cursor.continue();
-        } else {
-          resolve(successResult(result));
-        }
-      };
-      request.onerror = () => resolve(errorResult<T[]>(request.error?.message || 'read cursor error', result));
+      try {
+        const store = this.getObjectStore(storeName);
+        if (!store) return resolve(errorResult<T[]>('Database not initialized', []));
+        const source: IDBObjectStore | IDBIndex = indexName ? store.index(indexName) : store;
+        const request = source.openCursor(keyRange, direction);
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (cursor) {
+            result.push(cursor.value as T);
+            cursor.continue();
+          } else {
+            resolve(successResult(result));
+          }
+        };
+        request.onerror = () => resolve(errorResult<T[]>(request.error?.message || 'read cursor error', result));
+      } catch (error) {
+        // store.index() throws NotFoundError synchronously for a missing
+        // index; keep the "never rejects" contract callers rely on.
+        resolve(errorResult<T[]>(getErrorMessage(error, 'read cursor error'), result));
+      }
     });
   };
   deleteByCursor = ({
@@ -232,29 +243,37 @@ export class WebDB {
     keyRange?: IDBKeyRange;
   }): Promise<IDBResult<null>> => {
     return new Promise<IDBResult<null>>((resolve) => {
-      const store = this.getObjectStore(storeName, 'readwrite');
-      if (!store) return resolve(errorResult('Database not initialized', null));
-      const source: IDBObjectStore | IDBIndex = indexName ? store.index(indexName) : store;
-      const request = source.openKeyCursor(keyRange);
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) {
-          resolve(successResult(null));
-          return;
-        }
-        store.delete(cursor.primaryKey);
-        cursor.continue();
-      };
-      request.onerror = () => resolve(errorResult(request.error?.message || 'delete cursor error', null));
+      try {
+        const store = this.getObjectStore(storeName, 'readwrite');
+        if (!store) return resolve(errorResult('Database not initialized', null));
+        const source: IDBObjectStore | IDBIndex = indexName ? store.index(indexName) : store;
+        const request = source.openKeyCursor(keyRange);
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) {
+            resolve(successResult(null));
+            return;
+          }
+          store.delete(cursor.primaryKey);
+          cursor.continue();
+        };
+        request.onerror = () => resolve(errorResult(request.error?.message || 'delete cursor error', null));
+      } catch (error) {
+        resolve(errorResult(getErrorMessage(error, 'delete cursor error'), null));
+      }
     });
   };
   delete = ({ storeName, key }: { storeName: string; key: IDBValidKey }): Promise<IDBResult<null>> => {
     return new Promise<IDBResult<null>>((resolve) => {
-      const store = this.getObjectStore(storeName, 'readwrite');
-      if (!store) return resolve(errorResult('Database not initialized', null));
-      const request = store.delete(key);
-      request.onsuccess = () => resolve(successResult(null));
-      request.onerror = () => resolve(errorResult(request.error?.message || 'delete error', null));
+      try {
+        const store = this.getObjectStore(storeName, 'readwrite');
+        if (!store) return resolve(errorResult('Database not initialized', null));
+        const request = store.delete(key);
+        request.onsuccess = () => resolve(successResult(null));
+        request.onerror = () => resolve(errorResult(request.error?.message || 'delete error', null));
+      } catch (error) {
+        resolve(errorResult(getErrorMessage(error, 'delete error'), null));
+      }
     });
   };
 }

@@ -139,7 +139,10 @@ export const BookDataPanel = ({
           });
         })
         .catch((error: unknown) => {
-          showGlobalFallback({ message: error instanceof Error ? error.message : t('book_data.export_failed'), tone: 'error' });
+          showGlobalFallback({
+            message: error instanceof Error ? error.message : t('book_data.export_failed'),
+            tone: 'error',
+          });
         });
     },
     [bookDetail?.id],
@@ -212,7 +215,9 @@ export const BookDataPanel = ({
               <div className="flex flex-col items-center justify-center px-1">
                 <span className="reader-catalog-data-label text-[13px] mb-1">{t('book_data.total_words')}</span>
                 <div className="flex items-baseline gap-[2px]">
-                  <span className="reader-catalog-data-value text-[26px] font-semibold">{bookData.totalWords.value}</span>
+                  <span className="reader-catalog-data-value text-[26px] font-semibold">
+                    {bookData.totalWords.value}
+                  </span>
                   <span className="reader-catalog-data-unit text-[12px] font-normal">{bookData.totalWords.unit}</span>
                 </div>
               </div>

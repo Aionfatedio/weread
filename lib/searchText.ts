@@ -9,17 +9,7 @@ interface SentenceRange {
   start: number;
 }
 
-const SENTENCE_END_CHARACTERS = new Set([
-  '\u3002',
-  '\uff01',
-  '\uff1f',
-  '\uff1b',
-  '\u2026',
-  '!',
-  '?',
-  ';',
-  '.',
-]);
+const SENTENCE_END_CHARACTERS = new Set(['\u3002', '\uff01', '\uff1f', '\uff1b', '\u2026', '!', '?', ';', '.']);
 
 const SENTENCE_HARD_END_CHARACTERS = new Set(['\n']);
 
@@ -83,9 +73,19 @@ const appendSentenceRange = (ranges: SentenceRange[], text: string, start: numbe
   }
 };
 
-const consumeTrailingClosingCharacters = (text: string, index: number): number => {
+const consumeTrailingClosingCharacters = (text: string, index: number, quoteStack: string[]): number => {
   let end = index;
   while (end < text.length && SENTENCE_CLOSING_CHARACTERS.has(text[end])) {
+    const value = text[end];
+    // Ambiguous straight quote: it is both an opener and a closer. Absorb it
+    // into the finished sentence only when it actually closes a quote we saw
+    // open; otherwise it belongs to the NEXT sentence as an opener — eating
+    // it here would desync the quote stack and suppress sentence breaks
+    // until the next newline.
+    if (QUOTE_END_BY_START.get(value) === value) {
+      if (quoteStack[quoteStack.length - 1] !== value) break;
+      quoteStack.pop();
+    }
     end++;
   }
   return end;
@@ -125,7 +125,7 @@ const findSentenceRanges = (text: string): SentenceRange[] => {
     const quoteUpdate = updateQuoteStack(quoteStack, value);
     if (quoteUpdate === 'close') {
       if (quoteStack.length === 0 && hasTerminalBeforeClosingQuote(text, position)) {
-        const end = consumeTrailingClosingCharacters(text, position + 1);
+        const end = consumeTrailingClosingCharacters(text, position + 1, quoteStack);
         appendSentenceRange(ranges, text, sentenceStart, end);
         sentenceStart = end;
         position = end - 1;
@@ -135,7 +135,7 @@ const findSentenceRanges = (text: string): SentenceRange[] => {
     if (quoteUpdate === 'open') continue;
 
     if (quoteStack.length === 0 && SENTENCE_END_CHARACTERS.has(value)) {
-      const end = consumeTrailingClosingCharacters(text, position + 1);
+      const end = consumeTrailingClosingCharacters(text, position + 1, quoteStack);
       appendSentenceRange(ranges, text, sentenceStart, end);
       sentenceStart = end;
       position = end - 1;
@@ -167,7 +167,11 @@ export const findKeywordSentenceMatches = (text: string, keyword: string): Searc
     if (index === -1) break;
 
     rangeIndex = findRangeByIndex(ranges, index, rangeIndex);
-    const range = ranges[rangeIndex] || { end: text.length, start: 0 };
+    const range = ranges[rangeIndex];
+    // A match past the last range sits in trailing whitespace that was
+    // trimmed out of every sentence; no later match can land in a range
+    // either, so stop instead of fabricating a whole-text pseudo sentence.
+    if (!range) break;
     const previousMatch = matches[matches.length - 1];
 
     if (!previousMatch || previousMatch.start !== range.start || previousMatch.end !== range.end) {
@@ -178,7 +182,7 @@ export const findKeywordSentenceMatches = (text: string, keyword: string): Searc
       });
     }
 
-    fromIndex = index + Math.max(keyword.length, 1);
+    fromIndex = index + keyword.length;
   }
 
   return matches;

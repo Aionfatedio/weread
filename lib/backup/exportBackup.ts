@@ -1,6 +1,6 @@
 import { listBookResources } from '@/lib/bookResources';
 import { createBackupZip } from '@/lib/backup/backupZip';
-import { BACKUP_SCHEMA_VERSION } from '@/lib/backup/backupSchema';
+import { BACKUP_FILE_EXTENSION, BACKUP_SCHEMA_VERSION } from '@/lib/backup/backupSchema';
 import { getAllReaderSettings } from '@/lib/readerSettingStore';
 import { getBookById } from '@/store/books';
 import { getReaderAnnotations } from '@/lib/readerAnnotations';
@@ -20,7 +20,9 @@ import type { BookInfo } from '@/store/books';
 const encoder = new TextEncoder();
 
 const jsonEntry = (value: unknown): Uint8Array => {
-  return encoder.encode(`${JSON.stringify(value, null, 2)}\n`);
+  // Compact output: a full backup embeds the book's entire rawText, and
+  // pretty-printing only inflates size and encode time.
+  return encoder.encode(`${JSON.stringify(value)}\n`);
 };
 
 const formatExportTime = (timestamp: number): string => {
@@ -145,7 +147,7 @@ export const createSingleBookBackup = async ({
   const blob = await createBackupZip(entries);
   return {
     blob,
-    fileName: `${sanitizeFileName(book.title)}-${formatExportTime(createdAt)}-archive.bdz`,
+    fileName: `${sanitizeFileName(book.title)}-${formatExportTime(createdAt)}-archive.${BACKUP_FILE_EXTENSION}`,
   };
 };
 

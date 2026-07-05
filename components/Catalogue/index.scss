@@ -455,7 +455,9 @@
     line-height: 22px;
   }
 
-  .reader-mobile-control-panel[data-reader-control-panel='menu'] .readerCatalog_list_item.is-current .readerCatalog_list_item_title {
+  .reader-mobile-control-panel[data-reader-control-panel='menu']
+    .readerCatalog_list_item.is-current
+    .readerCatalog_list_item_title {
     font-weight: 500;
   }
 
@@ -513,7 +515,9 @@
     overflow-y: auto;
   }
 
-  :root[theme='dark'] .reader-mobile-control-panel[data-reader-control-panel='menu'] .readerCatalog_mobile_scroll_button {
+  :root[theme='dark']
+    .reader-mobile-control-panel[data-reader-control-panel='menu']
+    .readerCatalog_mobile_scroll_button {
     background: #4a4a4d;
     color: #d8d8dc;
   }

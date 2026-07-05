@@ -47,6 +47,11 @@ const BOM_UTF16_BE = [0xfe, 0xff];
 
 const ENCODING_SAMPLE_SIZE = 64 * 1024;
 
+// Below this confidence a jschardet guess is more likely to mangle a CJK text
+// (e.g. windows-1252 guessed from a mostly-ASCII preamble) than to help;
+// fall back to UTF-8 instead.
+const ENCODING_MIN_CONFIDENCE = 0.5;
+
 const matchesBom = (bytes: Uint8Array, signature: number[]): boolean => {
   if (bytes.length < signature.length) return false;
   for (let i = 0; i < signature.length; i++) {
@@ -93,7 +98,7 @@ export const checkEncoding = (uint8Array: Uint8Array): string => {
   const sample = uint8Array.subarray(0, sampleSize);
   try {
     const detected = jschardet.detect(bytesToBinaryString(sample));
-    if (detected?.encoding) return detected.encoding;
+    if (detected?.encoding && detected.confidence >= ENCODING_MIN_CONFIDENCE) return detected.encoding;
   } catch {
     // jschardet can throw on tiny / unusual inputs; fall back to UTF-8.
   }

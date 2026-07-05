@@ -4,6 +4,11 @@ const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
 const ZIP_UTF8_FLAG = 0x0800;
 const ZIP_STORE_METHOD = 0;
 
+// ZIP v2 (no ZIP64) hard limits: 32-bit sizes/offsets and 16-bit entry count.
+// Writing past them would silently truncate via >>>0 and emit a corrupt file.
+const ZIP_MAX_UINT32 = 0xffffffff;
+const ZIP_MAX_ENTRY_COUNT = 0xffff;
+
 export interface BackupZipEntryInput {
   data: Blob | Uint8Array | string;
   path: string;
@@ -106,7 +111,11 @@ const createCentralDirectoryHeader = (
   return header;
 };
 
-const createEndOfCentralDirectory = (entryCount: number, centralDirectorySize: number, centralDirectoryOffset: number) => {
+const createEndOfCentralDirectory = (
+  entryCount: number,
+  centralDirectorySize: number,
+  centralDirectoryOffset: number,
+) => {
   const header = new Uint8Array(22);
   const view = new DataView(header.buffer);
   writeUint32(view, 0, ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE);
@@ -130,12 +139,22 @@ export const createBackupZip = async (entries: BackupZipEntryInput[]): Promise<B
     if (!path) continue;
     const name = encoder.encode(path);
     const data = await toBytes(entry.data);
+    if (data.byteLength > ZIP_MAX_UINT32) {
+      throw new Error(`Backup entry too large for ZIP format: ${path}`);
+    }
     const crc = crc32(data);
     const localHeader = createLocalHeader(name, data, crc);
     const centralHeader = createCentralDirectoryHeader(name, data, crc, offset);
     localParts.push(localHeader, data);
     centralParts.push(centralHeader);
     offset += localHeader.byteLength + data.byteLength;
+    if (offset > ZIP_MAX_UINT32) {
+      throw new Error('Backup archive exceeds the 4GB ZIP limit.');
+    }
+  }
+
+  if (centralParts.length > ZIP_MAX_ENTRY_COUNT) {
+    throw new Error('Backup archive has too many entries for the ZIP format.');
   }
 
   const centralDirectoryOffset = offset;
@@ -158,6 +177,15 @@ export const readBackupZip = async (file: Blob): Promise<Map<string, BackupZipEn
   const eocdOffset = findEndOfCentralDirectory(bytes);
   if (eocdOffset < 0) throw new Error('Invalid BDZ archive.');
 
+  // All offsets below come from attacker-controllable file content; check
+  // every fixed-size read against the buffer before constructing DataViews,
+  // so a corrupted archive fails with a clear error instead of a RangeError.
+  const requireBounds = (offset: number, size: number, what: string): void => {
+    if (offset < 0 || offset + size > bytes.byteLength) {
+      throw new Error(`Invalid BDZ archive: truncated ${what}.`);
+    }
+  };
+
   const eocd = new DataView(bytes.buffer, bytes.byteOffset + eocdOffset, 22);
   const entryCount = eocd.getUint16(10, true);
   const centralDirectoryOffset = eocd.getUint32(16, true);
@@ -165,6 +193,7 @@ export const readBackupZip = async (file: Blob): Promise<Map<string, BackupZipEn
   let offset = centralDirectoryOffset;
 
   for (let index = 0; index < entryCount; index += 1) {
+    requireBounds(offset, 46, 'central directory entry');
     const central = new DataView(bytes.buffer, bytes.byteOffset + offset, 46);
     if (central.getUint32(0, true) !== ZIP_CENTRAL_DIRECTORY_SIGNATURE) {
       throw new Error('Invalid BDZ central directory.');
@@ -173,14 +202,17 @@ export const readBackupZip = async (file: Blob): Promise<Map<string, BackupZipEn
     if (method !== ZIP_STORE_METHOD) {
       throw new Error('Unsupported BDZ compression method.');
     }
+    const expectedCrc = central.getUint32(16, true);
     const compressedSize = central.getUint32(20, true);
     const nameLength = central.getUint16(28, true);
     const extraLength = central.getUint16(30, true);
     const commentLength = central.getUint16(32, true);
     const localHeaderOffset = central.getUint32(42, true);
     const nameStart = offset + 46;
+    requireBounds(nameStart, nameLength, 'entry name');
     const path = normalizePath(decoder.decode(bytes.subarray(nameStart, nameStart + nameLength)));
 
+    requireBounds(localHeaderOffset, 30, 'local file header');
     const local = new DataView(bytes.buffer, bytes.byteOffset + localHeaderOffset, 30);
     if (local.getUint32(0, true) !== ZIP_LOCAL_FILE_HEADER_SIGNATURE) {
       throw new Error('Invalid BDZ local file header.');
@@ -188,7 +220,11 @@ export const readBackupZip = async (file: Blob): Promise<Map<string, BackupZipEn
     const localNameLength = local.getUint16(26, true);
     const localExtraLength = local.getUint16(28, true);
     const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+    requireBounds(dataStart, compressedSize, 'entry data');
     const data = bytes.slice(dataStart, dataStart + compressedSize);
+    if (crc32(data) !== expectedCrc) {
+      throw new Error(`Invalid BDZ archive: checksum mismatch for ${path || 'entry'}.`);
+    }
     if (path) {
       result.set(path, { data, path });
     }

@@ -12,6 +12,9 @@ const shouldPrecache = (relativePath) => {
   if (relativePath === serviceWorkerFileName) return false;
   if (relativePath === '_redirects' || relativePath === '_headers') return false;
   if (relativePath.endsWith('.map')) return false;
+  // Store-listing screenshots have no offline value; don't make every
+  // install download them.
+  if (relativePath.startsWith('screenshots_')) return false;
   return true;
 };
 
@@ -51,12 +54,13 @@ const toScopeUrl = (file) => new URL(file, self.registration.scope).toString();
 const getPrecacheUrls = () => ['', ...PRECACHE_FILES].map(toScopeUrl);
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches
-      .open(CACHE_NAME)
-      .then((cache) => cache.addAll(getPrecacheUrls()))
-      .then(() => self.skipWaiting()),
-  );
+  // No skipWaiting here: the new worker must WAIT until every page from the
+  // old deployment has closed. Activating early would delete the old cache
+  // (below) while still-open pages hold old JS whose lazy-route chunks only
+  // exist in that cache — their next navigation would 404 into a blank page.
+  // The SKIP_WAITING message remains available for an explicit, user-driven
+  // update flow.
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(getPrecacheUrls())));
 });
 
 self.addEventListener('activate', (event) => {

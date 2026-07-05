@@ -1,4 +1,4 @@
-import { createSignal, subscribers } from 'ranuts/utils';
+import { subscribers } from 'ranuts/utils';
 import type { BookInfo } from '@/store/books';
 import { createEmptyTextSyntaxTree } from '@/lib/transformText';
 import type { TextSyntaxTree } from '@/lib/transformText';
@@ -45,26 +45,59 @@ export enum EVENT_NAME {
 
 export const syncHook = subscribers;
 
-export const [getCurrentBookDetail, setCurrentBookDetail] = createSignal<BookInfo | null>(null, {
-  subscriber: EVENT_NAME.SET_CURRENT_BOOK_DETAIL,
-});
+// Reference-equality signal. The ranuts createSignal deep-compares AND
+// deep-clones every written value (keeping the clone alive for the next
+// compare) — for signals that carry an entire book (TextSyntaxTree holds the
+// full rawText plus tens of thousands of blocks) that means double-resident
+// memory and a whole-tree clone on every pagination sync. Callers already
+// treat these values as immutable snapshots, so reference identity is the
+// correct change signal.
+const createRefSignal = <T>(initial: T, subscriber: EVENT_NAME): [() => T, (next: T) => void] => {
+  let current = initial;
+  return [
+    (): T => current,
+    (next: T): void => {
+      if (current === next) return;
+      current = next;
+      syncHook.call(subscriber);
+    },
+  ];
+};
 
-export const [getTextSyntaxTree, setTextSyntaxTree] = createSignal<TextSyntaxTree>(createEmptyTextSyntaxTree(), {
-  subscriber: EVENT_NAME.SET_TEXT_SYNTAX_TREE,
-});
+export const [getCurrentBookDetail, setCurrentBookDetail] = createRefSignal<BookInfo | null>(
+  null,
+  EVENT_NAME.SET_CURRENT_BOOK_DETAIL,
+);
 
-export const [getReaderSearchHighlight, setReaderSearchHighlight] = createSignal<ReaderSearchHighlight>(
+export const [getTextSyntaxTree, setTextSyntaxTree] = createRefSignal<TextSyntaxTree>(
+  createEmptyTextSyntaxTree(),
+  EVENT_NAME.SET_TEXT_SYNTAX_TREE,
+);
+
+export const [getReaderSearchHighlight, setReaderSearchHighlight] = createRefSignal<ReaderSearchHighlight>(
   createEmptyReaderSearchHighlight(),
-  { subscriber: EVENT_NAME.SET_READER_SEARCH_HIGHLIGHT },
+  EVENT_NAME.SET_READER_SEARCH_HIGHLIGHT,
 );
 
-export const [getReaderNavigationTarget, setReaderNavigationTarget] = createSignal<ReaderNavigationTarget>(
+export const [getReaderNavigationTarget, setReaderNavigationTarget] = createRefSignal<ReaderNavigationTarget>(
   { revision: 0 },
-  { subscriber: EVENT_NAME.SET_READER_NAVIGATION_TARGET },
+  EVENT_NAME.SET_READER_NAVIGATION_TARGET,
 );
 
-export const [getPageNum, setPageNum] = createSignal<number>(0, { subscriber: EVENT_NAME.SET_CURRENT_BOOK_PAGE });
+export const [getPageNum, setPageNum] = createRefSignal<number>(0, EVENT_NAME.SET_CURRENT_BOOK_PAGE);
 
-export const [getReaderControlPanelActive, setReaderControlPanelActive] = createSignal<boolean>(false, {
-  subscriber: EVENT_NAME.SET_READER_CONTROL_PANEL_ACTIVE,
-});
+export const [getReaderControlPanelActive, setReaderControlPanelActive] = createRefSignal<boolean>(
+  false,
+  EVENT_NAME.SET_READER_CONTROL_PANEL_ACTIVE,
+);
+
+// Every entry point into the reader must reset these signals before
+// navigating, otherwise BookDetail mounts against the previous book's tree
+// and can persist that book's position under the new book's id.
+export const clearReaderSignals = (): void => {
+  setPageNum(0);
+  setCurrentBookDetail(null);
+  setReaderNavigationTarget({ revision: 0 });
+  setReaderSearchHighlight(createEmptyReaderSearchHighlight());
+  setTextSyntaxTree(createEmptyTextSyntaxTree());
+};

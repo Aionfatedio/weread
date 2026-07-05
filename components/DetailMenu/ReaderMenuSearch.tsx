@@ -55,7 +55,9 @@ const SearchResultChapter = ({
       >
         <span className="reader-menu-search-chapter-title">{title}</span>
         <OcticonChevronRight
-          className={collapsed ? 'reader-menu-search-chapter-chevron' : 'reader-menu-search-chapter-chevron is-expanded'}
+          className={
+            collapsed ? 'reader-menu-search-chapter-chevron' : 'reader-menu-search-chapter-chevron is-expanded'
+          }
         />
       </button>
       {!collapsed &&
@@ -297,7 +299,12 @@ export const ReaderMenuSearch = ({ idleContent }: ReaderMenuSearchProps): React.
             onChange={onSearchInput}
           />
           {searchKeyword && (
-            <button aria-label={t('search.clear')} className="reader-menu-search-clear" type="button" onClick={clearSearch}>
+            <button
+              aria-label={t('search.clear')}
+              className="reader-menu-search-clear"
+              type="button"
+              onClick={clearSearch}
+            >
               <OcticonXCircle />
             </button>
           )}
@@ -309,8 +316,8 @@ export const ReaderMenuSearch = ({ idleContent }: ReaderMenuSearchProps): React.
         <div className="reader-menu-scroll-area pb-7 overflow-y-auto flex-auto" ref={searchResultRef}>
           {searchResult.length > 0 ? (
             searchResult.map((item) => {
-              const { index, title } = item;
-              const chapterKey = `${title}-${index}`;
+              const { index, titleId } = item;
+              const chapterKey = `${titleId ?? 'untitled'}-${index}`;
               return (
                 <SearchResultChapter
                   collapsed={collapsedChapterKeys.has(chapterKey)}

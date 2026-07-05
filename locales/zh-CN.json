@@ -164,5 +164,12 @@
   "backup.unsupported_version": "不支持的 BDZ 备份版本",
   "backup.missing_book_info": "BDZ 备份缺少书籍信息",
   "backup.missing_resource": "BDZ 缺少资源 {{0}}",
-  "backup.user_data_only": "该 BDZ 只包含用户数据，缺少书籍本体"
+  "backup.user_data_only": "该 BDZ 只包含用户数据，缺少书籍本体",
+  "route.load_failed": "页面加载失败，可能是应用已更新",
+  "route.reload": "刷新页面",
+  "book.progress.read": "已读 {{0}}%",
+  "book.progress.unread": "未读",
+  "book.progress.finished": "读完",
+  "home.slogan": "让阅读不再孤读",
+  "home.recent": "最近阅读"
 }

@@ -1,5 +1,7 @@
 import { readBackupZip } from '@/lib/backup/backupZip';
+import { getFileExtension } from '@/lib/utils';
 import {
+  BACKUP_FILE_EXTENSION,
   BACKUP_SCHEMA_VERSION,
   getBackupBookIdentity,
   isFullBackupManifest,
@@ -23,11 +25,6 @@ import type { ImportedBookData } from '@/lib/bookImporter';
 
 const decoder = new TextDecoder('utf-8');
 
-const getFileExtension = (file: File): string => {
-  const index = file.name.lastIndexOf('.');
-  return index === -1 ? '' : file.name.slice(index + 1).toLowerCase();
-};
-
 const readJsonEntry = <T>(entries: Map<string, { data: Uint8Array }>, path: string, fallback?: T): T => {
   const entry = entries.get(path);
   if (!entry) {
@@ -38,7 +35,7 @@ const readJsonEntry = <T>(entries: Map<string, { data: Uint8Array }>, path: stri
 };
 
 export const isBackupFile = (file: File): boolean => {
-  return getFileExtension(file) === 'bdz';
+  return getFileExtension(file) === BACKUP_FILE_EXTENSION;
 };
 
 export const parseBackupFile = async (file: File): Promise<ParsedBackupArchive> => {

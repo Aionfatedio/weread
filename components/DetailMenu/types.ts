@@ -10,6 +10,7 @@ export interface SearchResult {
   index: number;
   text: SearchResultText[];
   title: string;
+  titleId?: number;
 }
 
 export interface ReaderMenuSearchSessionState {

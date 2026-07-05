@@ -1,4 +1,5 @@
 import { hydrateReaderSettingCache, persistReaderSetting, readCachedReaderSetting } from '@/lib/readerSettingStore';
+import { canUseDOM } from '@/lib/utils';
 
 export type ReaderTheme = 'light' | 'dark';
 
@@ -72,8 +73,6 @@ const READER_SCROLL_PADDING_X_STORAGE_KEY = 'weread-reader-scroll-padding-x';
 const READER_FONT_FALLBACK = DEFAULT_READER_FONT_FAMILY;
 
 let readerSettingChangeTimer: number | undefined;
-
-const canUseDOM = (): boolean => typeof window !== 'undefined' && typeof document !== 'undefined';
 
 const readStorage = (key: string): string | null => {
   return readCachedReaderSetting(key);

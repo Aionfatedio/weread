@@ -1,6 +1,10 @@
 import React, { type CSSProperties } from 'react';
-import { type ReaderAnnotation, type ReaderAnnotationDraft, isReaderStyleAnnotationType } from '@/lib/readerAnnotations';
-import { renderHighlightedText } from '@/lib/reader/searchHighlight';
+import {
+  type ReaderAnnotation,
+  type ReaderAnnotationDraft,
+  isReaderStyleAnnotationType,
+} from '@/lib/readerAnnotations';
+import { renderHighlightedText, renderHighlightedTextSlice } from '@/lib/reader/searchHighlight';
 
 // Older annotations do not have groupId; multi-block writes happen synchronously in one menu action.
 export const LEGACY_STYLE_ANNOTATION_GROUP_TIME_WINDOW = 1000;
@@ -126,11 +130,12 @@ export const renderTextWithAnnotations = (
   }
 
   return getBlockAnnotationSegments(text, annotations).map((segment, index) => {
-    const segmentText = text.slice(segment.start, segment.end);
-    const content =
-      shouldHighlight && segmentText.includes(searchKeyword)
-        ? renderHighlightedText(segmentText, searchKeyword)
-        : segmentText;
+    // Highlight ranges are computed on the whole block text and clipped to
+    // this segment, so a keyword straddling an annotation boundary keeps its
+    // highlight (a per-segment `includes` check would miss it).
+    const content = shouldHighlight
+      ? renderHighlightedTextSlice(text, searchKeyword, segment.start, segment.end)
+      : text.slice(segment.start, segment.end);
     if (!hasAnnotationSegment(segment)) return <span key={`plain-${segment.start}-${index}`}>{content}</span>;
 
     const primaryAnnotation = getPrimaryAnnotation(segment);

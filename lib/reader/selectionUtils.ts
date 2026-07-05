@@ -330,7 +330,7 @@ export const getAnnotationMenuState = (
   return {
     annotation,
     bottom: bottomAnchor,
-    drafts: [createAnnotationDraft(styleAnnotation || noteAnnotation!, blockText)],
+    drafts: [createAnnotationDraft(annotation, blockText)],
     hasFormat: Boolean(styleAnnotation),
     left: Math.min(Math.max((left + right) / 2, 24), window.innerWidth - 24),
     mode: 'annotation',

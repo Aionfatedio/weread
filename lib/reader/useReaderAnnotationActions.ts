@@ -85,25 +85,18 @@ export const useReaderAnnotationActions = ({
           ? createReaderAnnotationGroupId()
           : selectionMenuState.styleAnnotation?.groupId;
 
-      if (selectionMenuState.styleAnnotation) {
-        selectionMenuState.drafts.forEach((draft) => {
-          const annotation = saveReaderAnnotation(
-            bookId,
-            draft,
-            type,
-            nextColor,
-            undefined,
-            selectionMenuState.styleAnnotation?.id,
-            groupId,
-          );
-          if (annotation) appliedAnnotations.push(annotation);
-        });
-      } else {
-        selectionMenuState.drafts.forEach((draft) => {
-          const annotation = saveReaderAnnotation(bookId, draft, type, nextColor, undefined, undefined, groupId);
-          if (annotation) appliedAnnotations.push(annotation);
-        });
-      }
+      selectionMenuState.drafts.forEach((draft) => {
+        const annotation = saveReaderAnnotation(
+          bookId,
+          draft,
+          type,
+          nextColor,
+          undefined,
+          selectionMenuState.styleAnnotation?.id,
+          groupId,
+        );
+        if (annotation) appliedAnnotations.push(annotation);
+      });
       return appliedAnnotations;
     },
     [annotationColors, bookId, selectionMenuState],

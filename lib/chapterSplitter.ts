@@ -76,14 +76,19 @@ const CJK_REVERSE_TITLE_REGEX = new RegExp(
 const EN_NUMBER_WORD_PATTERN =
   'one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty';
 
+// The subtitle group stays optional after the separator so titles that simply
+// END with punctuation ("CHAPTER I.", "Chapter 3:") still match.
 const EN_TITLE_REGEX = new RegExp(
-  `^(chapter|chap|book|part|volume|vol|section|scene|act)\\s+([${DIGIT_PATTERN}]+|[ivxlcdm]+|${EN_NUMBER_WORD_PATTERN})(?:[${TITLE_SEPARATOR_PATTERN}]+(.{1,90}))?$`,
+  `^(chapter|chap|book|part|volume|vol|section|scene|act)\\s+([${DIGIT_PATTERN}]+|[ivxlcdm]+|${EN_NUMBER_WORD_PATTERN})(?:[${TITLE_SEPARATOR_PATTERN}]+(.{1,90})?)?$`,
   'iu',
 );
 
 const ORDERED_CJK_TITLE_REGEX = new RegExp(`^([${CJK_NUMERAL_CHARS}]{1,10})[、.．)]\\s*(.{1,90})$`, 'u');
 
-const ORDERED_NUMERIC_TITLE_REGEX = new RegExp(`^([${DIGIT_PATTERN}]{1,4}(?:\\.[${DIGIT_PATTERN}]{1,4}){0,3})[.)．、:：-]?\\s+(.{1,90})$`, 'u');
+const ORDERED_NUMERIC_TITLE_REGEX = new RegExp(
+  `^([${DIGIT_PATTERN}]{1,4}(?:\\.[${DIGIT_PATTERN}]{1,4}){0,3})[.)．、:：-]?\\s+(.{1,90})$`,
+  'u',
+);
 
 const STANDALONE_NUMERIC_REGEX = new RegExp(`^([${DIGIT_PATTERN}]{1,4})[.)．、]?$`, 'u');
 
@@ -334,9 +339,10 @@ const splitTextLines = (text: string): TextLine[] => {
 
 const hasLikelyMarker = (line: string): boolean => {
   const lowerLine = line.toLowerCase();
-  const firstChar = normalizeDigits(line.trimStart())[0] || '';
+  const firstChar = normalizeDigits(line)[0] || '';
   return (
-    UPPERCASE_TITLE_REGEX.test(line.trim()) ||
+    UPPERCASE_TITLE_REGEX.test(line) ||
+    SPECIAL_TITLE_REGEX.test(line) ||
     line.includes('第') ||
     line.includes('章') ||
     line.includes('回') ||
@@ -438,7 +444,8 @@ const getCjkCandidate = (line: TextLine, strict: boolean): ChapterCandidate | un
   const { trimmed } = line;
   const compoundMatch = CJK_COMPOUND_TITLE_REGEX.exec(trimmed);
   if (compoundMatch) {
-    const [, outerNumberText, outerUnit, innerNumberText, innerUnit, separatorTitle = '', inlineTitle = ''] = compoundMatch;
+    const [, outerNumberText, outerUnit, innerNumberText, innerUnit, separatorTitle = '', inlineTitle = ''] =
+      compoundMatch;
     const hasSeparator = separatorTitle.length > 0;
 
     if (strict && inlineTitle && looksLikeSentenceTail(inlineTitle)) return undefined;
@@ -447,7 +454,8 @@ const getCjkCandidate = (line: TextLine, strict: boolean): ChapterCandidate | un
     const outerOrdinal = parseChineseNumber(outerNumberText);
     const innerOrdinal = parseChineseNumber(innerNumberText);
     const subtitle = hasSeparator ? separatorTitle : inlineTitle;
-    const compoundUnit = outerOrdinal === undefined ? `${outerUnit}:${innerUnit}` : `${outerUnit}:${outerOrdinal}:${innerUnit}`;
+    const compoundUnit =
+      outerOrdinal === undefined ? `${outerUnit}:${innerUnit}` : `${outerUnit}:${outerOrdinal}:${innerUnit}`;
 
     return createCandidate(line, 'explicit', trimmed, {
       baseScore: strict ? 56 : 48,
@@ -465,8 +473,8 @@ const getCjkCandidate = (line: TextLine, strict: boolean): ChapterCandidate | un
 
   const numberText = cjkMatch ? match[1] : match[2];
   const unit = cjkMatch ? match[2] : match[1];
-  const separatorTitle = cjkMatch ? match[3] || '' : match[3] || '';
-  const inlineTitle = cjkMatch ? match[4] || '' : match[4] || '';
+  const separatorTitle = match[3] || '';
+  const inlineTitle = match[4] || '';
   const hasSeparator = separatorTitle.length > 0;
 
   if (strict && inlineTitle && looksLikeSentenceTail(inlineTitle)) return undefined;
@@ -546,7 +554,7 @@ const getNumericCandidate = (line: TextLine): ChapterCandidate | undefined => {
   const match = STANDALONE_NUMERIC_REGEX.exec(line.trimmed);
   if (!match) return undefined;
   const ordinal = toNumber(match[1]);
-  if (!ordinal || ordinal > 9999) return undefined;
+  if (!ordinal) return undefined;
 
   return createCandidate(line, 'numeric', line.trimmed, {
     baseScore: 30,
@@ -636,7 +644,11 @@ const isAdjacentChildHeading = (previous: ChapterCandidate, current: ChapterCand
   return getUnitRank(previous.unit) < getUnitRank(current.unit);
 };
 
-const isNearTocCluster = (candidate: ChapterCandidate, familyCandidates: ChapterCandidate[], textLength: number): boolean => {
+const isNearTocCluster = (
+  candidate: ChapterCandidate,
+  familyCandidates: ChapterCandidate[],
+  textLength: number,
+): boolean => {
   if (textLength < 5000) return false;
   if (candidate.start > Math.min(textLength * 0.2, 30000)) return false;
 
@@ -659,7 +671,9 @@ const isNearTocTitle = (candidate: ChapterCandidate, familyCandidates: ChapterCa
     .some((line) => TOC_TITLE_REGEX.test(line.trim()));
   if (!hasTocTitle) return false;
 
-  const nearbyCount = familyCandidates.filter((item) => item.start >= candidate.start && item.start - candidate.start < 6000).length;
+  const nearbyCount = familyCandidates.filter(
+    (item) => item.start >= candidate.start && item.start - candidate.start < 6000,
+  ).length;
   return nearbyCount >= 3;
 };
 
@@ -669,7 +683,9 @@ const removeTocLikeCandidates = (
   text: string,
 ): ChapterCandidate[] => {
   return candidates.filter((candidate) => {
-    return !isNearTocCluster(candidate, familyCandidates, text.length) && !isNearTocTitle(candidate, familyCandidates, text);
+    return (
+      !isNearTocCluster(candidate, familyCandidates, text.length) && !isNearTocTitle(candidate, familyCandidates, text)
+    );
   });
 };
 
@@ -680,7 +696,9 @@ const hasHigherLevelBoundaryBetween = (
 ): boolean => {
   const currentRank = getUnitRank(current.unit);
   return candidates.some((candidate) => {
-    return candidate.start > previous.start && candidate.start < current.start && getUnitRank(candidate.unit) < currentRank;
+    return (
+      candidate.start > previous.start && candidate.start < current.start && getUnitRank(candidate.unit) < currentRank
+    );
   });
 };
 
@@ -735,11 +753,17 @@ const selectSequenceCandidates = (
 
     if (previousDuplicate && !hasHigherLevelBoundaryBetween(selected, previousDuplicate, candidate)) {
       const previousLooksEarly =
-        previousDuplicate.start < Math.min(text.length * 0.12, 18000) && candidate.start - previousDuplicate.start > 500;
+        previousDuplicate.start < Math.min(text.length * 0.12, 18000) &&
+        candidate.start - previousDuplicate.start > 500;
       if (candidate.score > previousDuplicate.score + 8 || previousLooksEarly) {
         const duplicateIndex = selected.indexOf(previousDuplicate);
-        if (duplicateIndex !== -1) selected[duplicateIndex] = candidate;
-        previousByUnitOrdinal.set(duplicateKey, candidate);
+        // Only adopt the replacement if the previous holder is still selected;
+        // otherwise the dedup map would point at a candidate that never made
+        // it into the sequence.
+        if (duplicateIndex !== -1) {
+          selected[duplicateIndex] = candidate;
+          previousByUnitOrdinal.set(duplicateKey, candidate);
+        }
       }
       return;
     }
@@ -778,7 +802,11 @@ const selectSequenceCandidates = (
     rememberCandidate(candidate);
   });
 
-  return selected;
+  // Mid-sequence duplicate replacement swaps in a later (larger-start)
+  // candidate, which can leave `selected` unsorted. Downstream chapter ranges
+  // are computed as [candidate.start, next.start), so order is an invariant —
+  // violating it yields chapters whose end precedes their start.
+  return selected.sort((a, b) => a.start - b.start);
 };
 
 const getOrdinalConsistency = (candidates: ChapterCandidate[]): number => {
@@ -912,7 +940,14 @@ export const extractBookChapters = (text: string): ChapterDetectionResult => {
     };
   }
 
-  const smartEvaluation = detectByCandidates(text, true, ['explicit', 'english', 'ordered', 'roman', 'numeric', 'uppercase']);
+  const smartEvaluation = detectByCandidates(text, true, [
+    'explicit',
+    'english',
+    'ordered',
+    'roman',
+    'numeric',
+    'uppercase',
+  ]);
   if (smartEvaluation) {
     return {
       method: 'smart',

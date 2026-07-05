@@ -20,7 +20,10 @@ export const FlyoutSelector = <T extends string = string>({
 }: FlyoutSelectorProps<T>): React.JSX.Element => {
   const [isOpen, setIsOpen] = useState(false);
   const currentLabel = options.find((option) => option.id === value)?.label || '';
-  const activeIndex = Math.max(0, options.findIndex((option) => option.id === value));
+  const activeIndex = Math.max(
+    0,
+    options.findIndex((option) => option.id === value),
+  );
   const topOffset = -(activeIndex * ITEM_HEIGHT) - 1;
 
   return (

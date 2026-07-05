@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { Link, useHref, useNavigate } from 'react-router-dom';
-import { BookCoverFallback } from '@/components/BookCard';
+import { BookCoverFallback, getBookProgressLabel } from '@/components/BookCard';
 import { Loading } from '@/components/Loading';
 import { OcticonXCircle as ShelfSearchClearIcon, OcticonSearch as ShelfSearchIcon } from '@/components/Octicon';
 import { ROUTE_PATH, createReaderPath } from '@/router';
@@ -14,7 +14,7 @@ import {
   getReaderBookShelfStatus,
   useReaderBookStatusRevision,
 } from '@/lib/readerBookStatus';
-import { getReaderProgress } from '@/lib/readerProgress';
+import { getBookRecentTimestamp } from '@/lib/readerProgress';
 import { useResolvedBookImage } from '@/lib/useResolvedBookImage';
 import {
   ImportCard,
@@ -24,15 +24,7 @@ import {
   useBookSearchNativeNavigation,
   useHomeBookImport,
 } from '@/pages/home';
-import {
-  createEmptyReaderSearchHighlight,
-  setCurrentBookDetail,
-  setPageNum,
-  setReaderNavigationTarget,
-  setReaderSearchHighlight,
-  setTextSyntaxTree,
-} from '@/lib/subscribe';
-import { createEmptyTextSyntaxTree } from '@/lib/transformText';
+import { clearReaderSignals } from '@/lib/subscribe';
 import { t } from '@/locales';
 import './index.scss';
 
@@ -60,21 +52,8 @@ const ShelfFilterIcon = (): React.JSX.Element => (
   </svg>
 );
 
-const getBookRecentTimestamp = (book: BookInfo): number => {
-  const progress = getReaderProgress(book.id);
-  return Math.max(progress?.updatedAt || 0, progress?.lastReadAt || 0, book.modifyTime || 0, book.createTime || 0);
-};
-
 const sortShelfBooks = (books: BookInfo[]): BookInfo[] => {
   return [...books].sort((a, b) => getBookRecentTimestamp(b) - getBookRecentTimestamp(a));
-};
-
-const clearReaderSignals = (): void => {
-  setPageNum(0);
-  setCurrentBookDetail(null);
-  setReaderNavigationTarget({ revision: 0 });
-  setReaderSearchHighlight(createEmptyReaderSearchHighlight());
-  setTextSyntaxTree(createEmptyTextSyntaxTree());
 };
 
 const useShelfBooks = (): {
@@ -105,11 +84,8 @@ const useShelfBooks = (): {
           return;
         }
         attempts += 1;
-        try {
-          await resumeDB();
-        } catch {
-          // Retry only; failures are reflected by an empty shelf.
-        }
+        // resumeDB never rejects; a false result is retried by the loop.
+        await resumeDB();
       }
       if (!cancelled) {
         setBooks([]);
@@ -170,7 +146,7 @@ const ShelfStatusFilter = ({
         aria-expanded={isExpanded}
         className="shelf-status-filter-trigger"
         type="button"
-        onClick={() => setIsExpanded(true)}
+        onClick={() => setIsExpanded((value) => !value)}
       >
         <span>{t(currentLabel)}</span>
         <ShelfFilterIcon />
@@ -181,7 +157,7 @@ const ShelfStatusFilter = ({
 
 const ShelfBookItem = ({ book }: { book: BookInfo }): React.JSX.Element => {
   const navigate = useNavigate();
-  const { id, image, title = '', author = '' } = book;
+  const { id, image, title = '' } = book;
   const resolvedImage = useResolvedBookImage(id, image);
   const [imageFailed, setImageFailed] = useState(false);
   const shouldShowImage = Boolean(resolvedImage && !imageFailed);
@@ -215,11 +191,7 @@ const ShelfBookItem = ({ book }: { book: BookInfo }): React.JSX.Element => {
       <div className="shelf-book-title" title={title}>
         {title}
       </div>
-      {author && (
-        <div className="shelf-book-author" title={author}>
-          {author}
-        </div>
-      )}
+      <div className="shelf-book-progress">{getBookProgressLabel(id)}</div>
     </a>
   );
 };
@@ -235,10 +207,11 @@ export const Shelf = (): React.JSX.Element => {
   const statusRevision = useReaderBookStatusRevision();
   const isSearchExpanded = Boolean(searchDraft);
   useBookSearchNativeNavigation(searchResultRef);
+  const { clearSearch } = searchState;
   const clearShelfSearch = useCallback(() => {
-    searchState.clearSearch();
+    clearSearch();
     setSearchDraft('');
-  }, [searchState]);
+  }, [clearSearch]);
   const visibleBooks = useMemo(() => {
     if (statusFilter === 'all') return books;
     return books.filter((book) => getReaderBookShelfStatus(book.id) === statusFilter);
@@ -255,30 +228,11 @@ export const Shelf = (): React.JSX.Element => {
                 ref={inputRef}
                 placeholder={t('search')}
                 onChange={(event) => setSearchDraft(event.currentTarget.value.trim())}
-                onInput={(event) => setSearchDraft(event.currentTarget.value.trim())}
               />
               {searchDraft && (
                 <button
                   aria-label={t('search.clear')}
-                  className="reader-search-clear-button"
-                  style={{
-                    position: 'absolute',
-                    right: 12,
-                    top: '50%',
-                    zIndex: 2,
-                    display: 'flex',
-                    width: 16,
-                    height: 16,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 0,
-                    border: 0,
-                    borderRadius: 999,
-                    background: 'transparent',
-                    color: '#8c8c8e',
-                    cursor: 'pointer',
-                    transform: 'translateY(-50%)',
-                  }}
+                  className="shelf-search-clear"
                   type="button"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={clearShelfSearch}

@@ -183,7 +183,9 @@ export const normalizeLocalFonts = async (fonts: BrowserLocalFont[]): Promise<Re
       CHINESE_CHAR_PATTERN.test(searchText) ||
       CHINESE_FONT_KEYWORDS.some((keyword) => lowerSearchText.includes(keyword.toLowerCase()));
 
-    if (!shouldShow && !isChineseFont(font)) return;
+    // shouldShow scans a superset of the text isChineseFont checks, so a
+    // separate isChineseFont fallback here would never fire.
+    if (!shouldShow) return;
 
     const family = (font.family || label).trim();
     const key = family.toLowerCase();

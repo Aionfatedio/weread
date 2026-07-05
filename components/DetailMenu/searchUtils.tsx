@@ -64,11 +64,13 @@ export const buildReaderMenuSearchResults = (
 
     const index = textList[0]?.page ?? textSyntaxTree.blockIdPage[item.id] ?? 0;
     const title = item.titleId === undefined ? '' : titleIdTitle[item.titleId] || '';
-    const pageSearchResultItem = pageSearchResult.find((i) => i.title === title);
+    // Group by titleId, not title text — different chapters can share a title
+    // (e.g. every volume opening with "序").
+    const pageSearchResultItem = pageSearchResult.find((i) => i.titleId === item.titleId);
     if (pageSearchResultItem) {
       pageSearchResultItem.text.push(...textList);
     } else {
-      pageSearchResult.push({ text: textList, index, title });
+      pageSearchResult.push({ text: textList, index, title, titleId: item.titleId });
     }
   }
 

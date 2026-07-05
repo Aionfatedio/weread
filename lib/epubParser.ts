@@ -56,8 +56,18 @@ const dirname = (value: string): string => {
 };
 
 const resolvePath = (base: string, href: string): string => {
-  const [path] = href.split('#');
-  if (!path) return normalizePath(base);
+  const [rawPath] = href.split('#');
+  if (!rawPath) return normalizePath(base);
+  // OPF/nav/xhtml hrefs are URIs: spaces and non-ASCII names arrive
+  // percent-encoded ("chapter%201.xhtml"), while the `files` map is keyed by
+  // the raw ZIP entry name ("chapter 1.xhtml"). Decode before resolving, and
+  // keep the original text for EPUBs whose hrefs were never encoded.
+  let path = rawPath;
+  try {
+    path = decodeURIComponent(rawPath);
+  } catch {
+    // Malformed escape sequence — treat the href as a literal path.
+  }
   return normalizePath(path.startsWith('/') ? path.slice(1) : `${base}${path}`);
 };
 
@@ -74,7 +84,9 @@ const getLocalNameText = (root: Document | Element, localName: string): string =
 
 const decodeXml = (bytes: Uint8Array): string => {
   const utf8Text = decoder.decode(bytes);
-  const encodingMatch = /^<\?xml[^>]*encoding=["']([^"']+)["'][^>]*\?>/iu.exec(utf8Text.slice(0, 200));
+  // Tolerate a BOM and leading whitespace before the XML declaration when
+  // probing for an encoding override (\s matches U+FEFF).
+  const encodingMatch = /^\s*<\?xml[^>]*encoding=["']([^"']+)["'][^>]*\?>/iu.exec(utf8Text.slice(0, 200));
   const encoding = encodingMatch?.[1];
   if (!encoding || /^utf-?8$/iu.test(encoding)) return utf8Text;
   try {

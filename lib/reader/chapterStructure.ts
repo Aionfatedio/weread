@@ -71,7 +71,11 @@ export const getChapterBlocks = (textSyntaxTree: TextSyntaxTree, titleId: number
     return [...previousBlocks, ...blocks];
   }
 
-  return blocks.length > 0 ? blocks : textSyntaxTree.blocks;
+  // A titleId with no blocks at all renders as an empty chapter (one blank
+  // page) — matching how pagination counts it. Falling back to the whole
+  // book's blocks here would render the entire book as a single "chapter"
+  // and corrupt every chapter start page after it.
+  return blocks;
 };
 
 export const getTitlePage = (textSyntaxTree: TextSyntaxTree, titleId: number): number => {
@@ -92,7 +96,7 @@ export const getPageTitle = (textSyntaxTree: TextSyntaxTree, pageNum: number): s
 };
 
 export const getFirstTitleId = (textSyntaxTree: TextSyntaxTree): number => {
-  return textSyntaxTree.sequences[0]?.titleId ?? (textSyntaxTree.titleIdTitle.length > 0 ? 0 : 0);
+  return textSyntaxTree.sequences[0]?.titleId ?? 0;
 };
 
 export const isValidTitleId = (textSyntaxTree: TextSyntaxTree, titleId: number | undefined): titleId is number => {

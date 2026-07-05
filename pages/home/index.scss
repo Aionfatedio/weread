@@ -304,3 +304,185 @@
 :root[theme='dark'] .flyout-selector-item:hover {
   background: #3b3b3b;
 }
+
+/* ---------------------------------------------------------------- */
+/* WeRead-style home layout: navbar / hero / recent-reading section */
+/* ---------------------------------------------------------------- */
+
+.home-page {
+  min-height: 100svh;
+  background: var(--front-bg-color-1);
+}
+
+.home-navbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--front-bg-color-3);
+  border-bottom: 1px solid var(--border-color-1);
+}
+
+.home-navbar-inner {
+  max-width: 80rem;
+  margin: 0 auto;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+}
+
+.home-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-color-1);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+}
+
+.home-brand img {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+.home-navbar-links {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+
+.home-navbar-link {
+  color: var(--text-color-2);
+  font-size: 15px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.home-navbar-link:hover {
+  color: var(--brand-blue-color-1);
+}
+
+.home-hero {
+  background:
+    radial-gradient(1200px 320px at 50% -80px, rgba(27, 136, 238, 0.1), rgba(27, 136, 238, 0)), var(--front-bg-color-2);
+  padding: 56px 24px 40px;
+}
+
+.home-slogan {
+  margin: 0 0 28px;
+  color: var(--text-color-1);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+.home-search-field r-input {
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.06));
+}
+
+.home-section-inner {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 40px 24px 0;
+}
+
+.home-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.home-section-title {
+  margin: 0;
+  color: var(--text-color-1);
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.home-book-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+/* Import tile: dashed drop-zone look, aligned with the desktop book cards. */
+.home-import-card {
+  width: 264px;
+  height: 160px;
+  margin: 20px 24px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px dashed var(--border-color-1);
+  border-radius: 12px;
+  background: var(--front-bg-color-3);
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    transform 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.home-import-card:hover {
+  border-color: var(--brand-blue-color-1);
+  transform: translateY(-4px);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.1);
+}
+
+.home-page-mobile {
+  background: var(--front-bg-color-1);
+}
+
+.home-mobile-top {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--front-bg-color-3);
+  border-bottom: 1px solid var(--border-color-1);
+  padding: 12px 20px 14px;
+}
+
+.home-brand-mobile {
+  margin-bottom: 12px;
+  font-size: 17px;
+}
+
+.home-brand-mobile img {
+  width: 22px;
+  height: 22px;
+}
+
+.home-section-head-mobile {
+  padding-top: 18px;
+}
+
+.home-section-head-mobile .home-section-title {
+  font-size: 18px;
+}
+
+.home-book-grid-mobile {
+  justify-content: flex-start;
+}
+
+.home-import-card-mobile {
+  width: 96px;
+  height: 134px;
+  margin: 20px 18px 0 0;
+  border-radius: 6px;
+}
+
+:root[theme='dark'] .home-import-card:hover {
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Collapse the slogan while searching so the results panel fits the
+   viewport without triggering a document scrollbar. */
+.home-slogan-hidden {
+  display: none;
+}

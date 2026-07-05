@@ -21,11 +21,12 @@ export interface ReaderLocator {
   totalPageCount?: number;
   visiblePages?: number;
   readingMode?: 'paged' | 'scroll';
+  // Layout fingerprint the page/blockPageOffset fields were computed under.
+  // On restore, offsets are only trusted when the current layout matches;
+  // otherwise the layout-independent blockScrollRatio is used instead.
+  layoutKey?: string;
   updatedAt: number;
 }
-
-// V2 stores progress records in IndexedDB; the public store name intentionally has no version suffix.
-const STORAGE_KEY = 'weread-reader-progress';
 
 const clampPage = (page: number, totalPage: number): number => {
   return Math.min(Math.max(page, 0), Math.max(totalPage, 0));
@@ -59,7 +60,7 @@ const writeProgressMap = (value: Record<string, ReaderLocator>): void => {
 const persistReaderProgress = (locator: ReaderLocator): void => {
   void db.update<ReaderLocator>({
     data: locator,
-    storeName: STORAGE_KEY,
+    storeName: READER_PROGRESS_STORE_NAME,
   });
 };
 
@@ -130,9 +131,19 @@ const findBlockByPage = (textSyntaxTree: TextSyntaxTree, page: number): ReaderBl
   return nearestBlock || blocks[0];
 };
 
+// The scroll anchor probes 28% down the viewport (clamped to 120-220px):
+// high enough to represent "what the user is reading", low enough to stay
+// clear of fixed headers on short viewports.
+const SCROLL_ANCHOR_VIEWPORT_RATIO = 0.28;
+const SCROLL_ANCHOR_MIN_Y = 120;
+const SCROLL_ANCHOR_MAX_Y = 220;
+
 export const getReaderScrollAnchorY = (): number => {
   if (typeof window === 'undefined') return 0;
-  return Math.min(Math.max(window.innerHeight * 0.28, 120), 220);
+  return Math.min(
+    Math.max(window.innerHeight * SCROLL_ANCHOR_VIEWPORT_RATIO, SCROLL_ANCHOR_MIN_Y),
+    SCROLL_ANCHOR_MAX_Y,
+  );
 };
 
 const findScrollAnchorElement = (
@@ -187,26 +198,42 @@ const findScrollAnchorElement = (
 
 const findBlockByQuote = (
   textSyntaxTree: TextSyntaxTree,
-  locator: Pick<ReaderLocator, 'textAfter' | 'textBefore'>,
+  locator: Pick<ReaderLocator, 'textAfter' | 'textBefore' | 'titleId'>,
 ): ReaderBlock | undefined => {
   const before = locator.textBefore?.trim();
   const after = locator.textAfter?.trim();
   if (!before && !after) return undefined;
 
-  return textSyntaxTree.blocks.find((block) => {
+  const matches = textSyntaxTree.blocks.filter((block) => {
     const beforeMatched = before ? block.text.includes(before) : true;
     const afterMatched = after ? block.text.includes(after) : true;
     return beforeMatched && afterMatched;
   });
+  if (matches.length <= 1 || locator.titleId === undefined) return matches[0];
+
+  // Repeated passages (dialogue, catchphrases) can match in many chapters;
+  // prefer the occurrence closest to the recorded one.
+  let best = matches[0];
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const block of matches) {
+    const distance = block.titleId === undefined ? Number.POSITIVE_INFINITY : Math.abs(block.titleId - locator.titleId);
+    if (distance < bestDistance) {
+      best = block;
+      bestDistance = distance;
+    }
+  }
+  return best;
 };
 
 export const createReaderLocator = ({
   bookId,
+  layoutKey,
   page,
   textSyntaxTree,
   visiblePages,
 }: {
   bookId: string;
+  layoutKey?: string;
   page: number;
   textSyntaxTree: TextSyntaxTree;
   visiblePages?: number;
@@ -227,6 +254,7 @@ export const createReaderLocator = ({
     blockPageOffset,
     blockScrollRatio,
     globalProgress,
+    layoutKey,
     page: safePage,
     readPercent: getPagedReadPercent(safePage, textSyntaxTree.totalPage || 0, normalizedVisiblePages),
     readingMode: 'paged',
@@ -274,7 +302,11 @@ export const createReaderScrollLocator = ({
   };
 };
 
-export const resolveReaderLocatorPage = (locator: ReaderLocator, textSyntaxTree: TextSyntaxTree): number => {
+export const resolveReaderLocatorPage = (
+  locator: ReaderLocator,
+  textSyntaxTree: TextSyntaxTree,
+  currentLayoutKey?: string,
+): number => {
   const totalPage = textSyntaxTree.totalPage || 0;
   const exactBlock = locator.blockId ? textSyntaxTree.blocks.find((block) => block.id === locator.blockId) : undefined;
   const block = exactBlock || findBlockByQuote(textSyntaxTree, locator);
@@ -283,8 +315,13 @@ export const resolveReaderLocatorPage = (locator: ReaderLocator, textSyntaxTree:
     const startPage = textSyntaxTree.blockIdPage[block.id];
     if (startPage !== undefined) {
       const endPage = getBlockPageEnd(textSyntaxTree, block.id) ?? startPage;
+      // A stored intra-block page offset is an absolute value from the layout
+      // it was measured under; after a font-size/viewport change it lands in
+      // the wrong place. The scroll ratio is layout-independent, so fall back
+      // to it whenever the layouts differ or are unknown.
+      const isSameLayout = Boolean(locator.layoutKey && currentLayoutKey && locator.layoutKey === currentLayoutKey);
       const offset =
-        locator.blockPageOffset ??
+        (isSameLayout ? locator.blockPageOffset : undefined) ??
         Math.round(clampRatio(locator.blockScrollRatio ?? 0) * Math.max(endPage - startPage, 0));
       return clampPage(startPage + offset, totalPage);
     }
@@ -304,6 +341,13 @@ export const resolveReaderLocatorPage = (locator: ReaderLocator, textSyntaxTree:
 export const getReaderProgress = (bookId?: string | null): ReaderLocator | undefined => {
   if (!bookId) return undefined;
   return readProgressMap()[bookId];
+};
+
+// Most-recent-activity timestamp for shelf/home sorting: latest of reading
+// progress and the book record's own create/modify times.
+export const getBookRecentTimestamp = (book: { createTime?: number; id: string; modifyTime?: number }): number => {
+  const progress = getReaderProgress(book.id);
+  return Math.max(progress?.updatedAt || 0, progress?.lastReadAt || 0, book.modifyTime || 0, book.createTime || 0);
 };
 
 export const hydrateReaderProgress = async (): Promise<void> => {
@@ -359,7 +403,7 @@ export const deleteReaderProgress = async (bookId: string): Promise<void> => {
   delete map[bookId];
   writeProgressMap(map);
   syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
-  await db.delete({ key: bookId, storeName: STORAGE_KEY });
+  await db.delete({ key: bookId, storeName: READER_PROGRESS_STORE_NAME });
 };
 
 export const restoreReaderProgressForBook = async ({
@@ -373,7 +417,7 @@ export const restoreReaderProgressForBook = async ({
   if (!progress) {
     delete map[bookId];
     writeProgressMap(map);
-    await db.delete({ key: bookId, storeName: STORAGE_KEY });
+    await db.delete({ key: bookId, storeName: READER_PROGRESS_STORE_NAME });
     syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
     return;
   }
@@ -386,7 +430,7 @@ export const restoreReaderProgressForBook = async ({
   writeProgressMap(map);
   await db.update<ReaderLocator>({
     data: next,
-    storeName: STORAGE_KEY,
+    storeName: READER_PROGRESS_STORE_NAME,
   });
   syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
 };

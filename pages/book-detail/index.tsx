@@ -1,7 +1,6 @@
 import { type CSSProperties, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
-import { debounce } from 'ranuts/utils';
 import {
   MOBILE_ICON_STYLE,
   ReaderPageNextIcon,
@@ -33,6 +32,7 @@ import {
 } from '@/lib/subscribe';
 import type { ReaderNavigationTarget } from '@/lib/subscribe';
 import { DEVICE_ENUM, useCheckDevice } from '@/lib/hooks';
+import { debounce } from '@/lib/utils';
 import { useSyncHookEvents } from '@/lib/useSyncHookEvents';
 import { Loading } from '@/components/Loading';
 import { t } from '@/locales';
@@ -65,14 +65,20 @@ import {
   type ChapterLayoutFingerprint,
   type ChapterPagination,
   clearChapterPaginationCache,
+  computeEstimateCalibration,
   estimateChapterPageCount,
   getCachedChapterPagination,
+  getPersistedChapterPageCount,
+  hydrateChapterPageCounts,
   measureChapterPagination,
+  persistChapterPageCount,
+  serializeChapterLayoutFingerprint,
   setCachedChapterPagination,
 } from '@/lib/chapterPagination';
 import {
   buildPageTitleId,
   getChapterBlocks,
+  getChapterTitleIds,
   getFirstTitleId,
   getPageTitle,
   getReaderProgressTitleId,
@@ -114,6 +120,60 @@ const BOOK_DETAIL_UI_EVENTS = [
 ] as const;
 
 const BOOK_DETAIL_PAGE_EVENTS = [EVENT_NAME.SET_CURRENT_BOOK_PAGE] as const;
+
+// Clamp a navigation target's page into the target block's own page span.
+// Shared by the paged pending-locator path and both scroll-mode derivations.
+const resolveNavigationBlockPageOffset = (
+  target: ReaderNavigationTarget,
+  blockStartPage: number | undefined,
+  blockEndPage: number | undefined,
+): number | undefined => {
+  if (typeof target.blockPageOffset === 'number' && Number.isFinite(target.blockPageOffset)) {
+    return target.blockPageOffset;
+  }
+  if (typeof target.page === 'number' && Number.isFinite(target.page) && blockStartPage !== undefined) {
+    return Math.min(
+      Math.max(target.page - blockStartPage, 0),
+      Math.max((blockEndPage ?? blockStartPage) - blockStartPage, 0),
+    );
+  }
+  return undefined;
+};
+
+interface ScrollNavigationState {
+  hasActiveScrollNavigation: boolean;
+  scrollTargetBlockId?: string;
+  scrollTargetBlockPageOffset?: number;
+  scrollTargetBlockRatio?: number;
+  scrollTargetPage?: number;
+}
+
+// Scroll-mode navigation derivation shared verbatim by the desktop and mobile
+// readers (it was previously duplicated inline in both components).
+const deriveScrollNavigation = (
+  target: ReaderNavigationTarget,
+  textSyntaxTree: TextSyntaxTree,
+  effectiveScrollTitleId: number | undefined,
+): ScrollNavigationState => {
+  const block = target.blockId ? textSyntaxTree.blocks.find((item) => item.id === target.blockId) : undefined;
+  const navigationTitleId = isValidTitleId(textSyntaxTree, target.titleId) ? target.titleId : block?.titleId;
+  const hasActiveScrollNavigation = target.revision > 0 && navigationTitleId === effectiveScrollTitleId;
+  if (!hasActiveScrollNavigation) return { hasActiveScrollNavigation };
+
+  const blockStartPage = block ? textSyntaxTree.blockIdPage[block.id] : undefined;
+  const blockEndPage = block ? (textSyntaxTree.blockIdPageEnd[block.id] ?? blockStartPage) : undefined;
+  const hasTargetPage = typeof target.page === 'number' && Number.isFinite(target.page);
+  return {
+    hasActiveScrollNavigation,
+    scrollTargetBlockId: target.blockId,
+    scrollTargetBlockPageOffset: resolveNavigationBlockPageOffset(target, blockStartPage, blockEndPage),
+    scrollTargetBlockRatio:
+      block && typeof target.matchStart === 'number' && Number.isFinite(target.matchStart)
+        ? Math.min(Math.max(target.matchStart / Math.max(block.text.length, 1), 0), 1)
+        : undefined,
+    scrollTargetPage: hasTargetPage ? target.page : undefined,
+  };
+};
 
 interface ReaderPagedContentProps {
   textSyntaxTree: TextSyntaxTree;
@@ -261,12 +321,26 @@ const ReaderPagedContent = ({
     };
   }, [addCurrentPageBookmark]);
 
-  const titleIdSequence = useMemo(() => {
-    if (textSyntaxTree.sequences.length > 0) {
-      return textSyntaxTree.sequences.map((s) => s.titleId);
-    }
-    return textSyntaxTree.titleIdTitle.map((_, i) => i);
-  }, [textSyntaxTree.sequences, textSyntaxTree.titleIdTitle]);
+  const titleIdSequence = useMemo(
+    () => getChapterTitleIds(textSyntaxTree),
+    [textSyntaxTree.sequences, textSyntaxTree.titleIdTitle],
+  );
+
+  const currentLayoutKey = useMemo(() => serializeChapterLayoutFingerprint(fingerprint), [fingerprint]);
+
+  // Load persisted per-chapter page counts for this book (one tiny record per
+  // layout); bump a revision so chapterStartPages recomputes once they land.
+  const [pageCountsRevision, setPageCountsRevision] = useState(0);
+  useEffect(() => {
+    if (!bookId) return;
+    let cancelled = false;
+    void hydrateChapterPageCounts(bookId).then(() => {
+      if (!cancelled) setPageCountsRevision((revision) => revision + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId]);
 
   const { chapterStartPages, totalPage } = useMemo(() => {
     const starts: Record<number, number> = {};
@@ -274,6 +348,23 @@ const ReaderPagedContent = ({
       return { chapterStartPages: starts, totalPage: 0 };
     }
     const isTwoColumn = visiblePages === 2;
+
+    // Pass 1: chapters that have BOTH a DOM measurement and an estimate feed
+    // the calibration factor that corrects the estimator's bias for this
+    // book/layout, so unvisited chapters project far closer to reality.
+    const calibrationSamples: Array<{ estimated: number; measured: number }> = [];
+    for (const tid of titleIdSequence) {
+      const cp = chapterPaginations.get(tid);
+      if (!cp) continue;
+      const chapterBlocks = blocksByTitleId.get(tid) ?? [];
+      if (chapterBlocks.length === 0 || isEmptyHeadingTitleBlocks(chapterBlocks)) continue;
+      calibrationSamples.push({
+        estimated: estimateChapterPageCount(chapterBlocks, fingerprint),
+        measured: cp.chapterPageCount,
+      });
+    }
+    const calibration = computeEstimateCalibration(calibrationSamples);
+
     let acc = 0;
     for (const tid of titleIdSequence) {
       if (isTwoColumn && acc % 2 !== 0) acc += 1;
@@ -287,11 +378,17 @@ const ReaderPagedContent = ({
       } else if (chapterBlocks.length === 0) {
         acc += 1;
       } else {
-        acc += estimateChapterPageCount(chapterBlocks, fingerprint);
+        // Preference order: this session's DOM measurement (handled above) >
+        // a measurement persisted from an earlier session under the same
+        // layout > calibrated estimate.
+        acc +=
+          getPersistedChapterPageCount(bookId, tid, fingerprint) ??
+          Math.max(1, Math.round(estimateChapterPageCount(chapterBlocks, fingerprint) * calibration));
       }
     }
     return { chapterStartPages: starts, totalPage: Math.max(0, acc - 1) };
-  }, [titleIdSequence, chapterPaginations, blocksByTitleId, fingerprint, visiblePages]);
+    // pageCountsRevision invalidates this memo when hydrated counts arrive.
+  }, [titleIdSequence, chapterPaginations, blocksByTitleId, fingerprint, visiblePages, bookId, pageCountsRevision]);
 
   const { currentTitleId, currentLocalPage } = useMemo(() => {
     if (titleIdSequence.length === 0) {
@@ -312,8 +409,7 @@ const ReaderPagedContent = ({
     for (let i = 0; i < titleIdSequence.length; i++) {
       const tid = titleIdSequence[i];
       const start = chapterStartPages[tid] ?? 0;
-      const nextStart =
-        i + 1 < titleIdSequence.length ? (chapterStartPages[titleIdSequence[i + 1]] ?? totalPage + 1) : totalPage + 1;
+      const nextStart = i + 1 < titleIdSequence.length ? chapterStartPages[titleIdSequence[i + 1]] : totalPage + 1;
       if (pageNum >= start && pageNum < nextStart) {
         return { currentTitleId: tid, currentLocalPage: Math.max(0, pageNum - start) };
       }
@@ -341,7 +437,7 @@ const ReaderPagedContent = ({
   const currentChapterPagination = currentTitleId !== undefined ? chapterPaginations.get(currentTitleId) : undefined;
   const safeLocalPage = currentChapterPagination
     ? Math.min(Math.max(0, currentLocalPage), Math.max(0, currentChapterPagination.chapterPageCount - 1))
-    : Math.max(0, currentLocalPage);
+    : currentLocalPage;
   const chapterStartsComplete = hasCompleteChapterStartPages(titleIdSequence, chapterStartPages);
 
   useLayoutEffect(() => {
@@ -353,15 +449,20 @@ const ReaderPagedContent = ({
 
   const getCurrentLocator = useCallback((): ReaderLocator | undefined => {
     if (!bookId) return undefined;
+    // The global signals may still hold the PREVIOUS book while this route's
+    // book is loading; saving would overwrite this book's progress with the
+    // other book's position (block ids collide across books).
+    if (getCurrentBookDetail()?.id !== bookId) return undefined;
     const currentTree = getTextSyntaxTree();
     if (!currentTree.rawText || currentTree.blocks.length === 0) return undefined;
     return createReaderLocator({
       bookId,
+      layoutKey: currentLayoutKey,
       page: getPageNum(),
       textSyntaxTree: currentTree,
       visiblePages,
     });
-  }, [bookId, visiblePages]);
+  }, [bookId, currentLayoutKey, visiblePages]);
 
   const rememberCurrentLocator = useCallback(() => {
     const locator = getCurrentLocator();
@@ -532,9 +633,6 @@ const ReaderPagedContent = ({
       });
     }
 
-    if (paginationMeasureFrameRef.current !== null) {
-      window.cancelAnimationFrame(paginationMeasureFrameRef.current);
-    }
     paginationMeasureFrameRef.current = window.requestAnimationFrame(() => {
       paginationMeasureFrameRef.current = null;
       const currentFlow = flowRef.current;
@@ -542,6 +640,7 @@ const ReaderPagedContent = ({
       const result = measureChapterPagination(currentFlow, layout.pageStep);
       if (!result) return;
       setCachedChapterPagination(bookId, currentTitleId, fingerprint, result);
+      persistChapterPageCount(bookId, currentTitleId, fingerprint, result.chapterPageCount);
       setChapterPaginations((prev) => {
         const base = restoreCachedPaginationBase ? restoreCachedPaginationBase() : new Map(prev);
         base.set(currentTitleId, result);
@@ -645,7 +744,10 @@ const ReaderPagedContent = ({
 
     if (!chapterPaginations.has(currentTitleId)) return;
 
-    const targetPage = getPagedSpreadStartPage(resolveReaderLocatorPage(locator, getTextSyntaxTree()), visiblePages);
+    const targetPage = getPagedSpreadStartPage(
+      resolveReaderLocatorPage(locator, getTextSyntaxTree(), currentLayoutKey),
+      visiblePages,
+    );
     pendingLocatorRef.current = null;
     if (getPageNum() !== targetPage) {
       setPageNum(targetPage);
@@ -654,6 +756,7 @@ const ReaderPagedContent = ({
       saveReaderProgress(
         createReaderLocator({
           bookId,
+          layoutKey: currentLayoutKey,
           page: targetPage,
           textSyntaxTree: getTextSyntaxTree(),
           visiblePages,
@@ -666,6 +769,7 @@ const ReaderPagedContent = ({
     blocksByTitleId,
     chapterPaginations,
     chapterStartPages,
+    currentLayoutKey,
     currentTitleId,
     titleIdSequence,
     visiblePages,
@@ -691,17 +795,7 @@ const ReaderPagedContent = ({
         : undefined;
     const blockStartPage = block ? textSyntaxTree.blockIdPage[block.id] : undefined;
     const blockEndPage = block ? (textSyntaxTree.blockIdPageEnd[block.id] ?? blockStartPage) : undefined;
-    const blockPageOffset =
-      typeof navigationTarget.blockPageOffset === 'number' && Number.isFinite(navigationTarget.blockPageOffset)
-        ? navigationTarget.blockPageOffset
-        : typeof navigationTarget.page === 'number' &&
-            Number.isFinite(navigationTarget.page) &&
-            blockStartPage !== undefined
-          ? Math.min(
-              Math.max(navigationTarget.page - blockStartPage, 0),
-              Math.max((blockEndPage ?? blockStartPage) - blockStartPage, 0),
-            )
-          : undefined;
+    const blockPageOffset = resolveNavigationBlockPageOffset(navigationTarget, blockStartPage, blockEndPage);
     pendingLocatorRef.current = {
       bookId: bookId ?? '',
       page: navigationTarget.page ?? 0,
@@ -877,8 +971,6 @@ const ReaderPagedContent = ({
     } as CSSProperties;
   }, [layout, safeLocalPage, visiblePages]);
 
-  const viewportStyle = useMemo(() => ({ ...style }) as CSSProperties, [style]);
-
   const renderedBlocks = useMemo(
     () =>
       currentChapterBlocks.map((block) =>
@@ -899,13 +991,12 @@ const ReaderPagedContent = ({
       searchKeyword,
     ],
   );
-  const bookmarkControl =
-    bookmarkLayerElement
-      ? createPortal(
-          <ReaderPageBookmarkControl active={Boolean(currentBookmark)} onToggle={togglePageBookmark} />,
-          bookmarkLayerElement,
-        )
-      : null;
+  const bookmarkControl = bookmarkLayerElement
+    ? createPortal(
+        <ReaderPageBookmarkControl active={Boolean(currentBookmark)} onToggle={togglePageBookmark} />,
+        bookmarkLayerElement,
+      )
+    : null;
 
   return (
     <>
@@ -917,7 +1008,7 @@ const ReaderPagedContent = ({
         onTouchEnd={onTouchEnd}
         onTouchStart={onTouchStart}
         ref={viewportRef}
-        style={viewportStyle}
+        style={style}
       >
         <article className="reader-content-text reader-column-flow" ref={flowRef} style={contentStyle}>
           <div className="reader-selection-overlay" ref={selectionOverlayRef} aria-hidden="true"></div>
@@ -984,7 +1075,6 @@ export const BookDetail = (): React.JSX.Element => {
 export const DesktopBookDetail = (): React.JSX.Element => {
   const id = useReaderBookId();
   const navigate = useNavigate();
-  const ref = useRef<HTMLDivElement>(null);
   const [_, update] = useState(0);
   const bookDetail: BookInfo | null = getCurrentBookDetail();
   const textSyntaxTree: TextSyntaxTree = getTextSyntaxTree();
@@ -1002,24 +1092,17 @@ export const DesktopBookDetail = (): React.JSX.Element => {
       }, 16),
     [],
   );
+  useEffect(() => () => updateUI.cancel(), [updateUI]);
 
   const updatePageUI = useCallback(() => {
     update((prev) => prev + 1);
   }, []);
 
-  const getTitle = () => {
-    const textSyntaxTree: TextSyntaxTree = getTextSyntaxTree();
-    const pageNum: number = getPageNum();
-    return getPageTitle(textSyntaxTree, pageNum);
-  };
-
   const toHome = () => {
-    if (!id) return;
     navigate(ROUTE_PATH.HOME);
   };
 
   const toShelf = () => {
-    if (!id) return;
     navigate(ROUTE_PATH.SHELF);
   };
 
@@ -1061,7 +1144,7 @@ export const DesktopBookDetail = (): React.JSX.Element => {
 
   useEffect(() => {
     if (readingMode !== 'scroll') return;
-    setScrollTitleId(getScrollInitialTitleId(id || undefined, pageNum, textSyntaxTree));
+    setScrollTitleId(getScrollInitialTitleId(id, pageNum, textSyntaxTree));
   }, [
     id,
     pageNum,
@@ -1105,61 +1188,11 @@ export const DesktopBookDetail = (): React.JSX.Element => {
   );
 
   const isScrollMode = readingMode === 'scroll';
-  const isReaderReady = textSyntaxTree.rawText.length > 0 && textSyntaxTree.blocks.length > 0;
-  useReaderReadingTimeTracker(id || undefined, isReaderReady, readingMode);
-  const initialScrollTitleId =
-    isScrollMode && isReaderReady ? getScrollInitialTitleId(id || undefined, pageNum, textSyntaxTree) : undefined;
-  const effectiveScrollTitleId = isValidTitleId(textSyntaxTree, scrollTitleId)
-    ? scrollTitleId
-    : (initialScrollTitleId ?? getFirstTitleId(textSyntaxTree));
-  const hasKnownPagedTotalPage = textSyntaxTree.totalPage > 0 || textSyntaxTree.pageTitleId.length > 0;
-  const isFirstPagedPage = pageNum <= 0;
-  const isLastPagedPage =
-    hasKnownPagedTotalPage &&
-    pageNum >= Math.max(0, textSyntaxTree.totalPage - (getVisiblePageCount(DEVICE_ENUM.DESKTOP) - 1));
-  const scrollProgressLocator = getReaderProgress(id || undefined);
-  const scrollNavigationBlock = readerNavigationTarget.blockId
-    ? textSyntaxTree.blocks.find((item) => item.id === readerNavigationTarget.blockId)
-    : undefined;
-  const scrollNavigationTitleId = isValidTitleId(textSyntaxTree, readerNavigationTarget.titleId)
-    ? readerNavigationTarget.titleId
-    : scrollNavigationBlock?.titleId;
-  const hasActiveScrollNavigation =
-    readerNavigationTarget.revision > 0 && scrollNavigationTitleId === effectiveScrollTitleId;
-  const scrollTargetBlockId = hasActiveScrollNavigation ? readerNavigationTarget.blockId : undefined;
-  const scrollTargetBlockRatio =
-    hasActiveScrollNavigation &&
-    scrollNavigationBlock &&
-    typeof readerNavigationTarget.matchStart === 'number' &&
-    Number.isFinite(readerNavigationTarget.matchStart)
-      ? Math.min(Math.max(readerNavigationTarget.matchStart / Math.max(scrollNavigationBlock.text.length, 1), 0), 1)
-      : undefined;
-  const scrollTargetBlockStartPage = scrollNavigationBlock
-    ? textSyntaxTree.blockIdPage[scrollNavigationBlock.id]
-    : undefined;
-  const scrollTargetBlockEndPage = scrollNavigationBlock
-    ? (textSyntaxTree.blockIdPageEnd[scrollNavigationBlock.id] ?? scrollTargetBlockStartPage)
-    : undefined;
-  const scrollTargetBlockPageOffset =
-    hasActiveScrollNavigation &&
-    typeof readerNavigationTarget.blockPageOffset === 'number' &&
-    Number.isFinite(readerNavigationTarget.blockPageOffset)
-      ? readerNavigationTarget.blockPageOffset
-      : hasActiveScrollNavigation &&
-          typeof readerNavigationTarget.page === 'number' &&
-          Number.isFinite(readerNavigationTarget.page) &&
-          scrollTargetBlockStartPage !== undefined
-        ? Math.min(
-            Math.max(readerNavigationTarget.page - scrollTargetBlockStartPage, 0),
-            Math.max((scrollTargetBlockEndPage ?? scrollTargetBlockStartPage) - scrollTargetBlockStartPage, 0),
-          )
-        : undefined;
-  const scrollTargetPage =
-    hasActiveScrollNavigation &&
-    typeof readerNavigationTarget.page === 'number' &&
-    Number.isFinite(readerNavigationTarget.page)
-      ? readerNavigationTarget.page
-      : undefined;
+  // Also require the loaded signals to belong to THIS route's book — after
+  // navigating from another book the globals briefly hold the previous
+  // book's tree, which must be neither rendered nor auto-saved.
+  const isReaderReady = textSyntaxTree.rawText.length > 0 && textSyntaxTree.blocks.length > 0 && bookDetail?.id === id;
+  useReaderReadingTimeTracker(id, isReaderReady, readingMode);
 
   if (!isReaderReady) {
     return (
@@ -1172,6 +1205,24 @@ export const DesktopBookDetail = (): React.JSX.Element => {
     );
   }
 
+  const initialScrollTitleId = isScrollMode ? getScrollInitialTitleId(id, pageNum, textSyntaxTree) : undefined;
+  const effectiveScrollTitleId = isValidTitleId(textSyntaxTree, scrollTitleId)
+    ? scrollTitleId
+    : (initialScrollTitleId ?? getFirstTitleId(textSyntaxTree));
+  const hasKnownPagedTotalPage = textSyntaxTree.totalPage > 0 || textSyntaxTree.pageTitleId.length > 0;
+  const isFirstPagedPage = pageNum <= 0;
+  const isLastPagedPage =
+    hasKnownPagedTotalPage &&
+    pageNum >= Math.max(0, textSyntaxTree.totalPage - (getVisiblePageCount(DEVICE_ENUM.DESKTOP) - 1));
+  const scrollProgressLocator = getReaderProgress(id);
+  const {
+    hasActiveScrollNavigation,
+    scrollTargetBlockId,
+    scrollTargetBlockPageOffset,
+    scrollTargetBlockRatio,
+    scrollTargetPage,
+  } = deriveScrollNavigation(readerNavigationTarget, textSyntaxTree, effectiveScrollTitleId);
+
   if (isScrollMode) {
     return (
       <div
@@ -1181,12 +1232,12 @@ export const DesktopBookDetail = (): React.JSX.Element => {
         <BookDetailOperate />
         <div className="reader-scroll-mode-inner">
           <div className="reader-scroll-mode-header">
-            <div>
+            <div className="reader-topbar-title" title={bookDetail?.title}>
               <a className="text-text-color-2 font-medium hover:text-text-color-1 cursor-pointer" onClick={toBookHome}>
                 {bookDetail?.title}
               </a>
             </div>
-            <div className="flex items-center gap-5">
+            <div className="reader-topbar-links flex items-center gap-5">
               <a className="text-text-color-2 font-normal cursor-pointer hover:text-text-color-1" onClick={toHome}>
                 {t('home')}
               </a>
@@ -1198,7 +1249,6 @@ export const DesktopBookDetail = (): React.JSX.Element => {
           </div>
           <div
             className="reader-scroll-mode-container"
-            ref={ref}
             style={
               {
                 '--reader-scroll-padding-x': `${scrollPaddingX}px`,
@@ -1208,7 +1258,7 @@ export const DesktopBookDetail = (): React.JSX.Element => {
           >
             <ReaderScrollContent
               allowAutoSave={scrollTitleId === undefined || scrollTitleId === effectiveScrollTitleId}
-              bookId={id || undefined}
+              bookId={id}
               navigationRevision={hasActiveScrollNavigation ? readerNavigationTarget.revision : 0}
               onNavigateTitle={navigateScrollTitle}
               progressLocator={scrollProgressLocator}
@@ -1232,12 +1282,12 @@ export const DesktopBookDetail = (): React.JSX.Element => {
     >
       <div className="w-full h-full flex flex-col">
         <div className="h-16 flex items-center justify-between flex-row flex-nowrap shrink-0">
-          <div>
+          <div className="reader-topbar-title" title={bookDetail?.title}>
             <a className="text-text-color-2 font-medium hover:text-text-color-1 cursor-pointer" onClick={toBookHome}>
               {bookDetail?.title}
             </a>
           </div>
-          <div className="flex items-center gap-5">
+          <div className="reader-topbar-links flex items-center gap-5">
             <a className="text-text-color-2 font-normal cursor-pointer hover:text-text-color-1" onClick={toHome}>
               {t('home')}
             </a>
@@ -1248,15 +1298,16 @@ export const DesktopBookDetail = (): React.JSX.Element => {
           </div>
         </div>
         <div
-          ref={ref}
           style={{
             viewTransitionName: `book-info-${id}`,
           }}
           className="bg-front-bg-color-3 rounded-2xl flex-grow pt-7 px-16 flex flex-col text-base book-info-container relative"
         >
-          <div className="reader-page-title-label text-text-color-3 text-sm font-light">{getTitle()}</div>
+          <div className="reader-page-title-label text-text-color-3 text-sm font-light">
+            {getPageTitle(textSyntaxTree, pageNum)}
+          </div>
           <ReaderPagedContent
-            bookId={id || undefined}
+            bookId={id}
             className="mt-5 cursor-auto font-normal tracking-wide text-text-color-1 text-lg leading-10 w-full"
             navigationTarget={readerNavigationTarget}
             pageNum={pageNum}
@@ -1302,7 +1353,6 @@ export const DesktopBookDetail = (): React.JSX.Element => {
 };
 
 export const MobileBookDetail = (): React.JSX.Element => {
-  const ref = useRef<HTMLDivElement>(null);
   const touchMoveRef = useRef<number>(0);
   const navigate = useNavigate();
   const [_, update] = useState(0);
@@ -1324,6 +1374,7 @@ export const MobileBookDetail = (): React.JSX.Element => {
       }, 16),
     [],
   );
+  useEffect(() => () => updateUI.cancel(), [updateUI]);
 
   const updatePageUI = useCallback(() => {
     update((prev) => prev + 1);
@@ -1430,7 +1481,8 @@ export const MobileBookDetail = (): React.JSX.Element => {
     };
   }, []);
 
-  const isReaderReady = textSyntaxTree.rawText.length > 0 && textSyntaxTree.blocks.length > 0;
+  const isReaderReady =
+    textSyntaxTree.rawText.length > 0 && textSyntaxTree.blocks.length > 0 && getCurrentBookDetail()?.id === id;
   useReaderReadingTimeTracker(id, isReaderReady, readingMode);
 
   useLayoutEffect(() => {
@@ -1440,7 +1492,7 @@ export const MobileBookDetail = (): React.JSX.Element => {
 
   useEffect(() => {
     if (readingMode !== 'scroll') return;
-    setScrollTitleId(getScrollInitialTitleId(id || undefined, pageNum, textSyntaxTree));
+    setScrollTitleId(getScrollInitialTitleId(id, pageNum, textSyntaxTree));
   }, [
     id,
     pageNum,
@@ -1495,54 +1547,18 @@ export const MobileBookDetail = (): React.JSX.Element => {
   }
 
   const isScrollMode = readingMode === 'scroll';
-  const initialScrollTitleId =
-    isScrollMode && isReaderReady ? getScrollInitialTitleId(id || undefined, pageNum, textSyntaxTree) : undefined;
+  const initialScrollTitleId = isScrollMode ? getScrollInitialTitleId(id, pageNum, textSyntaxTree) : undefined;
   const effectiveScrollTitleId = isValidTitleId(textSyntaxTree, scrollTitleId)
     ? scrollTitleId
     : (initialScrollTitleId ?? getFirstTitleId(textSyntaxTree));
-  const scrollProgressLocator = getReaderProgress(id || undefined);
-  const scrollNavigationBlock = readerNavigationTarget.blockId
-    ? textSyntaxTree.blocks.find((item) => item.id === readerNavigationTarget.blockId)
-    : undefined;
-  const scrollNavigationTitleId = isValidTitleId(textSyntaxTree, readerNavigationTarget.titleId)
-    ? readerNavigationTarget.titleId
-    : scrollNavigationBlock?.titleId;
-  const hasActiveScrollNavigation =
-    readerNavigationTarget.revision > 0 && scrollNavigationTitleId === effectiveScrollTitleId;
-  const scrollTargetBlockId = hasActiveScrollNavigation ? readerNavigationTarget.blockId : undefined;
-  const scrollTargetBlockRatio =
-    hasActiveScrollNavigation &&
-    scrollNavigationBlock &&
-    typeof readerNavigationTarget.matchStart === 'number' &&
-    Number.isFinite(readerNavigationTarget.matchStart)
-      ? Math.min(Math.max(readerNavigationTarget.matchStart / Math.max(scrollNavigationBlock.text.length, 1), 0), 1)
-      : undefined;
-  const scrollTargetBlockStartPage = scrollNavigationBlock
-    ? textSyntaxTree.blockIdPage[scrollNavigationBlock.id]
-    : undefined;
-  const scrollTargetBlockEndPage = scrollNavigationBlock
-    ? (textSyntaxTree.blockIdPageEnd[scrollNavigationBlock.id] ?? scrollTargetBlockStartPage)
-    : undefined;
-  const scrollTargetBlockPageOffset =
-    hasActiveScrollNavigation &&
-    typeof readerNavigationTarget.blockPageOffset === 'number' &&
-    Number.isFinite(readerNavigationTarget.blockPageOffset)
-      ? readerNavigationTarget.blockPageOffset
-      : hasActiveScrollNavigation &&
-          typeof readerNavigationTarget.page === 'number' &&
-          Number.isFinite(readerNavigationTarget.page) &&
-          scrollTargetBlockStartPage !== undefined
-        ? Math.min(
-            Math.max(readerNavigationTarget.page - scrollTargetBlockStartPage, 0),
-            Math.max((scrollTargetBlockEndPage ?? scrollTargetBlockStartPage) - scrollTargetBlockStartPage, 0),
-          )
-        : undefined;
-  const scrollTargetPage =
-    hasActiveScrollNavigation &&
-    typeof readerNavigationTarget.page === 'number' &&
-    Number.isFinite(readerNavigationTarget.page)
-      ? readerNavigationTarget.page
-      : undefined;
+  const scrollProgressLocator = getReaderProgress(id);
+  const {
+    hasActiveScrollNavigation,
+    scrollTargetBlockId,
+    scrollTargetBlockPageOffset,
+    scrollTargetBlockRatio,
+    scrollTargetPage,
+  } = deriveScrollNavigation(readerNavigationTarget, textSyntaxTree, effectiveScrollTitleId);
 
   if (isScrollMode) {
     return (
@@ -1555,7 +1571,6 @@ export const MobileBookDetail = (): React.JSX.Element => {
         </div>
         <div
           className="reader-mobile-scroll-container"
-          ref={ref}
           style={
             {
               '--reader-scroll-padding-x': `${scrollPaddingX}px`,
@@ -1566,7 +1581,7 @@ export const MobileBookDetail = (): React.JSX.Element => {
         >
           <ReaderScrollContent
             allowAutoSave={scrollTitleId === undefined || scrollTitleId === effectiveScrollTitleId}
-            bookId={id || undefined}
+            bookId={id}
             navigationRevision={hasActiveScrollNavigation ? readerNavigationTarget.revision : 0}
             onNavigateTitle={navigateScrollTitle}
             progressLocator={scrollProgressLocator}
@@ -1589,7 +1604,6 @@ export const MobileBookDetail = (): React.JSX.Element => {
     <div className="reader-mobile-paged-page reader-user-select-disabled" onContextMenu={preventReaderContextMenu}>
       <div
         className="reader-mobile-paged-viewport w-screen h-screen bg-front-bg-color-1"
-        ref={ref}
         style={{
           viewTransitionName: `book-info-${id}`,
         }}
@@ -1605,7 +1619,7 @@ export const MobileBookDetail = (): React.JSX.Element => {
             <r-icon name="more" className="cursor-pointer rotate-90" style={MOBILE_ICON_STYLE} onClick={back}></r-icon>
           </div>
           <ReaderPagedContent
-            bookId={id || undefined}
+            bookId={id}
             className="w-full h-full text-text-color-1 text-lg leading-10"
             navigationTarget={readerNavigationTarget}
             onClick={click}
@@ -1619,9 +1633,11 @@ export const MobileBookDetail = (): React.JSX.Element => {
           <div className={`reader-mobile-bottom-bar ${isTouch ? 'is-visible' : ''}`}>
             <MobileBookDetailOperate />
           </div>
-          <div className="reader-mobile-page-count text-right text-text-color-2 text-base absolute bottom-8 right-8 z-10">
-            {pageNum + 1} / {totalPage + 1}
-          </div>
+          {totalPage > 0 && (
+            <div className="reader-mobile-page-count text-right text-text-color-2 text-base absolute bottom-8 right-8 z-10">
+              {pageNum + 1} / {totalPage + 1}
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -33,6 +33,8 @@ const NON_EMPTY_REGEX = /\S/;
 
 const BLOCK_TAGS = new Set(['blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'p']);
 
+const BLOCK_TAGS_SELECTOR = 'blockquote, h1, h2, h3, h4, h5, h6, img, p';
+
 const normalizeText = (text: string): string => text.replace(/\r\n|\r/g, '\n');
 
 const stripCaptionTags = (value: string): string => {
@@ -152,17 +154,47 @@ const isSameHeadingText = (a: string, b: string): boolean => {
 
 const getDirectBlockElements = (root: Element): Element[] => {
   const blocks: Element[] = [];
+  const ownerDocument = root.ownerDocument;
 
-  const visit = (element: Element): void => {
-    const tagName = element.tagName.toLowerCase();
-    if (BLOCK_TAGS.has(tagName)) {
-      blocks.push(element);
-      return;
-    }
-    Array.from(element.children).forEach(visit);
+  // The EPUB sanitizer demotes unknown containers (div, section, ...) to
+  // <span>, so chapter text frequently sits in inline wrappers or bare text
+  // nodes rather than block tags. Group those runs into synthetic <p>
+  // elements instead of dropping them — otherwise that prose silently
+  // disappears from the reader, search, and rawText.
+  const inlineRun: Node[] = [];
+
+  const flushInlineRun = (): void => {
+    if (inlineRun.length === 0) return;
+    const paragraph = ownerDocument.createElement('p');
+    inlineRun.forEach((node) => paragraph.appendChild(node.cloneNode(true)));
+    inlineRun.length = 0;
+    blocks.push(paragraph);
   };
 
-  Array.from(root.children).forEach(visit);
+  const visit = (element: Element): void => {
+    for (const child of Array.from(element.childNodes)) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        if (child.textContent && NON_EMPTY_REGEX.test(child.textContent)) inlineRun.push(child);
+        continue;
+      }
+      if (child.nodeType !== Node.ELEMENT_NODE) continue;
+      const childElement = child as Element;
+      const isBlock = BLOCK_TAGS.has(childElement.tagName.toLowerCase());
+      if (isBlock || childElement.querySelector(BLOCK_TAGS_SELECTOR)) {
+        flushInlineRun();
+        if (isBlock) blocks.push(childElement);
+        else visit(childElement);
+        continue;
+      }
+      // Pure inline subtree — accumulate it into the current paragraph run.
+      if (childElement.textContent && NON_EMPTY_REGEX.test(childElement.textContent)) {
+        inlineRun.push(childElement);
+      }
+    }
+  };
+
+  visit(root);
+  flushInlineRun();
   return blocks;
 };
 

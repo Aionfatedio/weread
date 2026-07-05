@@ -36,6 +36,13 @@ export const safeRemoveStorage = (key: string): void => {
   }
 };
 
+export const getFileExtension = (file: File): string => {
+  const index = file.name.lastIndexOf('.');
+  return index === -1 ? '' : file.name.slice(index + 1).toLowerCase();
+};
+
+export const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 export const getErrorMessage = (error: unknown, fallback = 'Unknown error'): string => {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
@@ -47,10 +54,40 @@ export const getErrorMessage = (error: unknown, fallback = 'Unknown error'): str
 };
 
 export const createRandomId = (prefix = 'id'): string => {
-  if (canUseDOM() && typeof window.crypto?.randomUUID === 'function') {
-    return `${prefix}-${window.crypto.randomUUID()}`;
+  // crypto.randomUUID needs a secure context, not a DOM — keep this working
+  // inside workers instead of silently degrading to the weak fallback there.
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return `${prefix}-${globalThis.crypto.randomUUID()}`;
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+export interface CancelableDebounced<Args extends unknown[]> {
+  (...args: Args): void;
+  cancel: () => void;
+}
+
+// Unlike the ranuts debounce this one exposes cancel(), so effects can drop a
+// pending trailing call on cleanup instead of letting it fire after unmount.
+export const debounce = <Args extends unknown[]>(
+  fn: (...args: Args) => void,
+  waitMs: number,
+): CancelableDebounced<Args> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const debounced = (...args: Args): void => {
+    if (timer !== undefined) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = undefined;
+      fn(...args);
+    }, waitMs);
+  };
+  debounced.cancel = () => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  return debounced;
 };
 
 export const sha256Hex = async (value: string | Uint8Array<ArrayBuffer>): Promise<string> => {
@@ -60,9 +97,7 @@ export const sha256Hex = async (value: string | Uint8Array<ArrayBuffer>): Promis
     // fingerprints / ids, and collisions silently overwrite different books.
     // Web Crypto only requires a secure context (HTTPS or localhost), so
     // exposing the failure surfaces it where it can be fixed.
-    throw new Error(
-      'SHA-256 unavailable: serve this app over HTTPS or from localhost so WebCrypto is enabled.',
-    );
+    throw new Error('SHA-256 unavailable: serve this app over HTTPS or from localhost so WebCrypto is enabled.');
   }
   const data: Uint8Array = typeof value === 'string' ? new TextEncoder().encode(value) : value;
   const buffer = await subtle.digest('SHA-256', data as Uint8Array<ArrayBuffer>);

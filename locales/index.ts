@@ -45,10 +45,15 @@ export const normalizeLanguage = (lang: string): Locales => {
   return Locales.en;
 };
 
+// The locale the UI is actually rendering in — also the right locale for
+// Intl date/number formatting, so dates match the interface language instead
+// of the raw browser default.
+export const getActiveLocale = (): Locales => {
+  return normalizeLanguage(globalThis.navigator?.language || Locales.en);
+};
+
 export const t = (key: string, params?: Array<string | number>): string => {
-  // eslint-disable-next-line n/no-unsupported-features/node-builtins
-  const browserLang = globalThis.navigator?.language || Locales.en;
-  const lang = normalizeLanguage(browserLang);
+  const lang = getActiveLocale();
   const text =
     resources[lang]?.translation[key] ??
     resources[Locales.en]?.translation[key] ??

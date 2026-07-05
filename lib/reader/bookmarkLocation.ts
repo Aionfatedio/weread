@@ -3,6 +3,11 @@ import type { ReaderLayout } from '@/lib/reader/readerLayout';
 
 const READER_BOOKMARK_EXCERPT_LENGTH = 100;
 
+// Tolerance (as a fraction of the page step) when mapping a rect's x-offset
+// back to a page index — absorbs sub-pixel column rounding so a rect sitting
+// exactly on a column boundary snaps to the page it visually belongs to.
+const PAGE_SNAP_TOLERANCE_RATIO = 0.08;
+
 export const normalizeBookmarkText = (value: string): string => value.replace(/\s+/gu, ' ').trim();
 
 export const createBookmarkExcerpt = (value: string): string => {
@@ -34,36 +39,32 @@ const getFirstVisibleTextCandidate = (
   let offsetBase = 0;
   let best: ReaderBookmarkTextCandidate | undefined;
 
-  try {
-    let node = walker.nextNode() as Text | null;
-    while (node) {
-      const value = node.data || '';
-      for (let offset = 0; offset < value.length; offset++) {
-        if (!value[offset]?.trim()) continue;
-        range.setStart(node, offset);
-        range.setEnd(node, offset + 1);
+  let node = walker.nextNode() as Text | null;
+  while (node) {
+    const value = node.data || '';
+    for (let offset = 0; offset < value.length; offset++) {
+      if (!value[offset]?.trim()) continue;
+      range.setStart(node, offset);
+      range.setEnd(node, offset + 1);
 
-        const rects = Array.from(range.getClientRects());
-        for (const rect of rects) {
-          if (rect.width <= 0 || rect.height <= 0 || !rectIntersects(rect, bounds)) continue;
-          const top = Math.max(rect.top, bounds.top);
-          const left = Math.max(rect.left, bounds.left);
-          if (!best || top < best.top || (top === best.top && left < best.left)) {
-            best = {
-              element,
-              left,
-              startOffset: offsetBase + offset,
-              top,
-            };
-          }
+      const rects = Array.from(range.getClientRects());
+      for (const rect of rects) {
+        if (rect.width <= 0 || rect.height <= 0 || !rectIntersects(rect, bounds)) continue;
+        const top = Math.max(rect.top, bounds.top);
+        const left = Math.max(rect.left, bounds.left);
+        if (!best || top < best.top || (top === best.top && left < best.left)) {
+          best = {
+            element,
+            left,
+            startOffset: offsetBase + offset,
+            top,
+          };
         }
       }
-
-      offsetBase += value.length;
-      node = walker.nextNode() as Text | null;
     }
-  } finally {
-    range.detach();
+
+    offsetBase += value.length;
+    node = walker.nextNode() as Text | null;
   }
 
   return best;
@@ -143,22 +144,18 @@ const getTextOffsetRect = (element: HTMLElement, offset: number): DOMRect | unde
   const range = document.createRange();
   let offsetBase = 0;
 
-  try {
-    let node = walker.nextNode() as Text | null;
-    while (node) {
-      const value = node.data || '';
-      const nextOffsetBase = offsetBase + value.length;
-      if (targetOffset >= offsetBase && targetOffset < nextOffsetBase) {
-        const nodeOffset = targetOffset - offsetBase;
-        range.setStart(node, nodeOffset);
-        range.setEnd(node, Math.min(nodeOffset + 1, value.length));
-        return Array.from(range.getClientRects()).find((rect) => rect.width > 0 && rect.height > 0);
-      }
-      offsetBase = nextOffsetBase;
-      node = walker.nextNode() as Text | null;
+  let node = walker.nextNode() as Text | null;
+  while (node) {
+    const value = node.data || '';
+    const nextOffsetBase = offsetBase + value.length;
+    if (targetOffset >= offsetBase && targetOffset < nextOffsetBase) {
+      const nodeOffset = targetOffset - offsetBase;
+      range.setStart(node, nodeOffset);
+      range.setEnd(node, Math.min(nodeOffset + 1, value.length));
+      return Array.from(range.getClientRects()).find((rect) => rect.width > 0 && rect.height > 0);
     }
-  } finally {
-    range.detach();
+    offsetBase = nextOffsetBase;
+    node = walker.nextNode() as Text | null;
   }
 
   return undefined;
@@ -185,7 +182,10 @@ export const resolveRenderedBookmarkPage = ({
   const rect = getTextOffsetRect(blockElement, annotation.startOffset) ?? blockElement.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return undefined;
   const flowRect = flow.getBoundingClientRect();
-  const localPage = Math.max(0, Math.floor((rect.left - flowRect.left + layout.pageStep * 0.08) / layout.pageStep));
+  const localPage = Math.max(
+    0,
+    Math.floor((rect.left - flowRect.left + layout.pageStep * PAGE_SNAP_TOLERANCE_RATIO) / layout.pageStep),
+  );
   const titleIdValue = Number(blockElement.dataset.readerTitleId);
   const chapterStart = Number.isFinite(titleIdValue) ? chapterStartPages[titleIdValue] : undefined;
   if (chapterStart === undefined) return undefined;

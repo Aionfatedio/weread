@@ -1,6 +1,5 @@
 import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useHref, useNavigate } from 'react-router-dom';
-import { debounce } from 'ranuts/utils';
 import { BookCard, BookCoverFallback } from '@/components/BookCard';
 import {
   addBook,
@@ -29,10 +28,11 @@ import { ROUTE_PATH, createReaderPath } from '@/router';
 import { DEVICE_ENUM, useCheckDevice } from '@/lib/hooks';
 import { useResolvedBookImage } from '@/lib/useResolvedBookImage';
 import { clearReaderBookData } from '@/lib/readerBookData';
-import { getReaderProgress } from '@/lib/readerProgress';
-import { getErrorMessage } from '@/lib/utils';
+import { getBookRecentTimestamp, getReaderProgress } from '@/lib/readerProgress';
+import { debounce, escapeRegExp, getErrorMessage } from '@/lib/utils';
+import { clearReaderSignals } from '@/lib/subscribe';
 import { showGlobalFallback } from '@/lib/globalFallback';
-import { clearChapterPaginationCache } from '@/lib/chapterPagination';
+import { clearChapterPaginationCache, deletePersistedChapterPageCounts } from '@/lib/chapterPagination';
 import { Loading } from '@/components/Loading';
 import {
   OcticonChevronRight as HomeArrowRightIcon,
@@ -113,8 +113,10 @@ const chooseBookFiles = (): Promise<File[]> => {
     uploadFile.setAttribute('multiple', 'multiple');
     uploadFile.onchange = () => {
       resolve(uploadFile.files ? Array.from(uploadFile.files) : []);
-      uploadFile.remove();
     };
+    // Without this, dismissing the file dialog leaves the whole import
+    // routine awaiting forever (one leaked closure per cancel).
+    uploadFile.oncancel = () => resolve([]);
     uploadFile.click();
   });
 };
@@ -214,7 +216,8 @@ const createImportConflictState = ({
   const progress = getReaderProgress(existingBook.id);
   const readPercent = formatProgressPercent(progress?.readPercent);
   const lastReadDateLabel = t('import.last_read_time', [formatImportDate(progress?.updatedAt)]);
-  const lastReadLabel = readPercent > 0 ? `${lastReadDateLabel} (${t('import.read_percent', [readPercent])})` : lastReadDateLabel;
+  const lastReadLabel =
+    readPercent > 0 ? `${lastReadDateLabel} (${t('import.read_percent', [readPercent])})` : lastReadDateLabel;
   return {
     bookId: existingBook.id,
     fileName: file.name,
@@ -246,7 +249,8 @@ const createBackupUserDataConflictState = ({
   const progress = getReaderProgress(existingBook.id);
   const readPercent = formatProgressPercent(progress?.readPercent);
   const lastReadDateLabel = t('import.last_read_time', [formatImportDate(progress?.updatedAt)]);
-  const lastReadLabel = readPercent > 0 ? `${lastReadDateLabel} (${t('import.read_percent', [readPercent])})` : lastReadDateLabel;
+  const lastReadLabel =
+    readPercent > 0 ? `${lastReadDateLabel} (${t('import.read_percent', [readPercent])})` : lastReadDateLabel;
   return {
     bookId: existingBook.id,
     description: t('import.existing_user_data', [existingBook.title || archive.book.title]),
@@ -288,7 +292,9 @@ const createMissingBackupBookState = ({
   };
 };
 
-const selectBackupArchivesForRestore = (archives: ParsedBackupArchive[]): {
+const selectBackupArchivesForRestore = (
+  archives: ParsedBackupArchive[],
+): {
   ignoredCount: number;
   selected: ParsedBackupArchive[];
 } => {
@@ -316,11 +322,6 @@ const upsertBookListItem = (books: BookInfo[], book: BookInfo): BookInfo[] => {
   const index = books.findIndex((item) => item.id === book.id);
   const rest = index === -1 ? books : books.filter((item) => item.id !== book.id);
   return [book, ...rest];
-};
-
-const getBookRecentTimestamp = (book: BookInfo): number => {
-  const progress = getReaderProgress(book.id);
-  return Math.max(progress?.updatedAt || 0, progress?.lastReadAt || 0, book.modifyTime || 0, book.createTime || 0);
 };
 
 const getRecentHomeBooks = (books: BookInfo[]): BookInfo[] => {
@@ -367,6 +368,7 @@ export const ImportConflictDialog = ({
   const openExistingBook = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     onCancel(false);
+    clearReaderSignals();
     navigate(bookUrl);
   };
 
@@ -393,9 +395,7 @@ export const ImportConflictDialog = ({
           {keepBoth ? (
             <div className="home-import-dialog-note">{t('import.rename_note', [state.title])}</div>
           ) : (
-            <div className="home-import-dialog-warning">
-              {state.warningText || t('import.overwrite_warning')}
-            </div>
+            <div className="home-import-dialog-warning">{state.warningText || t('import.overwrite_warning')}</div>
           )}
         </div>
         {canKeepBoth && (
@@ -453,7 +453,6 @@ export interface BookSearchState {
 }
 
 const useHomeBookList = (): { bookList: BookInfo[]; setBookList: React.Dispatch<React.SetStateAction<BookInfo[]>> } => {
-  const hasCachedBookListRef = useRef(homeBookListCache !== null);
   const [bookList, setRawBookList] = useState<BookInfo[]>(() => homeBookListCache || []);
   const setBookList: React.Dispatch<React.SetStateAction<BookInfo[]>> = useCallback((value) => {
     setRawBookList((previous) => {
@@ -472,16 +471,16 @@ const useHomeBookList = (): { bookList: BookInfo[]; setBookList: React.Dispatch<
         return;
       }
       attempts++;
-      try {
-        await resumeDB();
-      } catch {
-        // resumeDB rejects only with false; treat as transient and continue retrying.
-      }
+      // resumeDB never rejects; a false result is retried by the loop.
+      await resumeDB();
     }
   }, []);
 
+  // Stale-while-revalidate: the cached snapshot renders immediately (no empty
+  // flash when returning from the reader), but we always refetch — books
+  // imported from other pages (Shelf shares the import hook) would otherwise
+  // never show up here until a full reload.
   useEffect(() => {
-    if (hasCachedBookListRef.current) return;
     loadBooks();
   }, [loadBooks]);
 
@@ -629,6 +628,7 @@ export const useHomeBookImport = (
                 );
                 if (decision.action === 'cancel') continue;
                 clearChapterPaginationCache(existingSameBook.id);
+                void deletePersistedChapterPageCounts(existingSameBook.id);
                 const result = await addBook({
                   ...imported,
                   fingerprint,
@@ -660,6 +660,7 @@ export const useHomeBookImport = (
                 if (decision.action === 'cancel') continue;
                 if (decision.action === 'overwrite') {
                   clearChapterPaginationCache(existingSameTitleBook.id);
+                  void deletePersistedChapterPageCounts(existingSameTitleBook.id);
                   const result = await addBook({
                     ...imported,
                     fingerprint,
@@ -694,7 +695,9 @@ export const useHomeBookImport = (
 
             const targetBook = workingBooks.find((book) => {
               const identity = getBookIdentity(book);
-              return book.id === archive.book.id || identity === backupIdentity || identity === archive.book.fingerprint;
+              return (
+                book.id === archive.book.id || identity === backupIdentity || identity === archive.book.fingerprint
+              );
             });
             if (!targetBook) {
               await requestConflictDecision(createMissingBackupBookState({ archive, file }));
@@ -893,6 +896,9 @@ export const useBookSearch = (inputRef: React.RefObject<HTMLInputElement | null>
     target.addEventListener('compositionstart', onCompositionStart);
     target.addEventListener('compositionend', onCompositionEnd);
     return () => {
+      // Drop any trailing debounced call — after unmount it would still fire
+      // three worker searches (content search is expensive on big libraries).
+      debouncedRunSearch.cancel();
       target.removeEventListener('input', onSearchInput);
       target.removeEventListener('change', onSearchInput);
       target.removeEventListener('compositionstart', onCompositionStart);
@@ -921,27 +927,28 @@ export const useBookSearch = (inputRef: React.RefObject<HTMLInputElement | null>
 const renderHighlightedText = (text: string, keyword: string, bookId: string): React.ReactNode => {
   if (!text) return null;
   if (!keyword) return text;
-  const segments = text.split(keyword);
-  return segments.map((segment, index) => (
-    <span key={`${bookId}-${index}`} item-id={bookId}>
-      {segment}
-      {index < segments.length - 1 && (
-        <span item-id={bookId} className="text-blue-500">
-          {keyword}
-        </span>
-      )}
-    </span>
-  ));
+  // Case-insensitive split with a capturing group: odd indexes are the
+  // matched text (original casing preserved). The worker matches
+  // case-insensitively, so the highlight must too.
+  const segments = text.split(new RegExp(`(${escapeRegExp(keyword)})`, 'iu'));
+  return segments.map((segment, index) =>
+    index % 2 === 1 ? (
+      <span key={`${bookId}-${index}`} className="text-blue-500">
+        {segment}
+      </span>
+    ) : (
+      <span key={`${bookId}-${index}`}>{segment}</span>
+    ),
+  );
 };
 
 interface SearchResultRowProps {
   book: BookInfo | SearchResult;
   highlightedField: 'title' | 'author' | 'matched';
   keyword: string;
-  rowKey: string;
 }
 
-const SearchResultRow = ({ book, highlightedField, keyword, rowKey }: SearchResultRowProps): React.JSX.Element => {
+const SearchResultRow = ({ book, highlightedField, keyword }: SearchResultRowProps): React.JSX.Element => {
   const { id, title = '', author = '', image } = book;
   const matchedText = (book as SearchResult).matchedText?.[0] || '';
   const resolvedImage = useResolvedBookImage(id, image);
@@ -954,23 +961,22 @@ const SearchResultRow = ({ book, highlightedField, keyword, rowKey }: SearchResu
   return (
     <div
       className="py-3.5 px-5 flex flex-row flex-nowrap items-center shrink-0 cursor-pointer hover:bg-light-gray-color-1 min-h-32"
-      key={rowKey}
       item-id={id}
     >
       {shouldShowImage ? (
-        <img className="w-16 mr-5" src={resolvedImage} item-id={id} alt={title} onError={() => setImageFailed(true)} />
+        <img className="w-16 mr-5" src={resolvedImage} alt={title} onError={() => setImageFailed(true)} />
       ) : (
-        <BookCoverFallback className="w-16 h-24 mr-5" itemId={id} title={title} />
+        <BookCoverFallback className="w-16 h-24 mr-5" title={title} />
       )}
       <div>
-        <div className="text-lg text-text-color-1 font-medium break-all" item-id={id}>
+        <div className="text-lg text-text-color-1 font-medium break-all">
           {highlightedField === 'title' ? renderHighlightedText(title, keyword, id) : title}
         </div>
-        <div className="text-base text-text-color-2 font-medium mt-1 break-all" item-id={id}>
+        <div className="text-base text-text-color-2 font-medium mt-1 break-all">
           {highlightedField === 'author' ? renderHighlightedText(author, keyword, id) : author}
         </div>
         {highlightedField === 'matched' && (
-          <div className="text-base text-text-color-2 font-medium mt-1 break-all" item-id={id}>
+          <div className="text-base text-text-color-2 font-medium mt-1 break-all">
             {renderHighlightedText(matchedText, keyword, id)}
           </div>
         )}
@@ -1023,7 +1029,6 @@ export const SearchResultsPanel = ({
                     book={book}
                     highlightedField="title"
                     keyword={searchValue}
-                    rowKey={`${book.id}-title`}
                   />
                 ))}
               </div>
@@ -1041,7 +1046,6 @@ export const SearchResultsPanel = ({
                     book={book}
                     highlightedField="author"
                     keyword={searchValue}
-                    rowKey={`${book.id}-author`}
                   />
                 ))}
               </div>
@@ -1063,7 +1067,6 @@ export const SearchResultsPanel = ({
                     book={book}
                     highlightedField="matched"
                     keyword={searchValue}
-                    rowKey={`${book.id}-content`}
                   />
                 ))}
               </div>
@@ -1142,10 +1145,12 @@ export const useBookSearchNativeNavigation = (searchResultRef: React.RefObject<H
     const element = searchResultRef.current;
     if (!element) return;
     const handler = (e: MouseEvent) => {
-      const target = e.target as HTMLDivElement;
-      const id = target.getAttribute('item-id');
+      // closest(): the click usually lands on a child (cover svg, title
+      // span, row padding), not on the element carrying item-id.
+      const id = (e.target instanceof Element ? e.target : null)?.closest('[item-id]')?.getAttribute('item-id');
       if (!id) return;
       startSpaViewTransition(() => {
+        clearReaderSignals();
         navigate(createReaderPath(id));
       });
     };
@@ -1173,52 +1178,57 @@ export const DesktopHome = (): React.JSX.Element => {
   useBookSearchNativeNavigation(searchResultRef);
 
   return (
-    <div>
-      <div className="w-full bg-front-bg-color-2">
-        <div className="w-full min-h-72 pt-28">
-          <div className="home-search-field relative w-1/2 min-w-2xs h-14 block mx-auto">
-            <HomeSearchIcon
-              className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none z-10"
-              style={{ width: 24, height: 24, color: 'var(--icon-color-1)' }}
-            />
-            <r-input
-              className="w-full h-full block mx-auto"
-              style={DESKTOP_INPUT_STYLE}
-              placeholder={t('search')}
-              ref={inputRef}
-            ></r-input>
-          </div>
-          <SearchResultsPanel
-            state={searchState}
-            panelClassName="w-1/2 min-w-2xs block mx-auto bg-front-bg-color-3 rounded-xl py-5 mb-6"
-            searchResultRef={searchResultRef}
-          />
+    <div className="home-page">
+      <header className="home-navbar">
+        <div className="home-navbar-inner">
+          <Link className="home-brand" to={ROUTE_PATH.HOME}>
+            <img alt="" src={`${import.meta.env.BASE_URL}read.svg`} />
+            <span>weread</span>
+          </Link>
+          <nav className="home-navbar-links">
+            <Link className="home-navbar-link" to={ROUTE_PATH.SHELF}>
+              {t('my_bookcase')}
+            </Link>
+          </nav>
         </div>
+      </header>
+      <div className="home-hero">
+        <h1 className={`home-slogan ${searchState.searchValue ? 'home-slogan-hidden' : ''}`}>{t('home.slogan')}</h1>
+        <div className="home-search-field relative w-1/2 min-w-2xs h-14 block mx-auto">
+          <HomeSearchIcon
+            className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none z-10"
+            style={{ width: 24, height: 24, color: 'var(--icon-color-1)' }}
+          />
+          <r-input
+            className="w-full h-full block mx-auto"
+            style={DESKTOP_INPUT_STYLE}
+            placeholder={t('search')}
+            ref={inputRef}
+          ></r-input>
+        </div>
+        <SearchResultsPanel
+          height="calc(100vh - 250px)"
+          state={searchState}
+          panelClassName="w-1/2 min-w-2xs block mx-auto bg-front-bg-color-3 rounded-xl py-5 mb-6"
+          searchResultRef={searchResultRef}
+        />
       </div>
       {!searchState.searchValue && (
-        <div className="home-bookcase-section w-full bg-front-bg-color-1">
-          <div className="max-w-7xl mx-auto pt-12 flex flex-row justify-between items-center">
-            <div className="flex justify-start items-center">
-              <div className="cursor-pointer text-text-color-1 text-2xl font-medium">{t('my_bookcase')}</div>
-              <HomeArrowRightIcon
-                className="cursor-pointer"
-                style={{ width: 24, height: 24, color: 'var(--icon-color-1)' }}
-              />
+        <div className="home-bookcase-section w-full">
+          <div className="home-section-inner">
+            <div className="home-section-head">
+              <h2 className="home-section-title">{t('home.recent')}</h2>
+              <Link className="home-shelf-link" to={ROUTE_PATH.SHELF}>
+                <span>{t('shelf.view')}</span>
+                <HomeArrowRightIcon style={{ width: 16, height: 16 }} />
+              </Link>
             </div>
-            <Link className="home-shelf-link" to={ROUTE_PATH.SHELF}>
-              <span>{t('shelf.view')}</span>
-              <HomeArrowRightIcon style={{ width: 16, height: 16 }} />
-            </Link>
-          </div>
-          <div className="max-w-7xl mx-auto flex flex-row flex-wrap justify-start items-center">
-            <ImportCard
-              className="w-2xs h-40 bg-front-bg-color-3 p-5 cursor-pointer justify-center rounded-xl mr-6 items-center flex hover:scale-110 transition-all mt-5"
-              iconSize={64}
-              onAdd={onAdd}
-            />
-            {recentBookList.map((book) => (
-              <BookCard book={book} key={book.id} />
-            ))}
+            <div className="home-book-grid">
+              <ImportCard className="home-import-card" iconSize={40} onAdd={onAdd} />
+              {recentBookList.map((book) => (
+                <BookCard book={book} key={book.id} />
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -1237,19 +1247,19 @@ export const MobileHome = (): React.JSX.Element => {
   useBookSearchNativeNavigation(searchResultRef);
 
   return (
-    <div className="w-full min-h-svh bg-front-bg-color-2">
-      <div className="p-5">
+    <div className="home-page home-page-mobile w-full min-h-svh">
+      <div className="home-mobile-top">
+        <div className="home-brand home-brand-mobile">
+          <img alt="" src={`${import.meta.env.BASE_URL}read.svg`} />
+          <span>weread</span>
+        </div>
         <div className="home-mobile-search">
           <HomeSearchIcon className="home-mobile-search-icon" />
-          <input
-            ref={inputRef}
-            placeholder={t('search')}
-            type="text"
-          />
+          <input ref={inputRef} placeholder={t('search')} type="text" />
           {searchState.searchValue && (
             <button
               aria-label={t('search.clear')}
-              className="home-mobile-search-clear reader-search-clear-button"
+              className="home-mobile-search-clear"
               type="button"
               onMouseDown={(event) => event.preventDefault()}
               onClick={searchState.clearSearch}
@@ -1269,20 +1279,16 @@ export const MobileHome = (): React.JSX.Element => {
         </div>
       )}
       {!searchState.searchValue && (
-        <div className="px-5">
-          <div className="flex items-center justify-between pt-2">
-            <div className="text-text-color-1 text-xl font-medium">{t('my_bookcase')}</div>
+        <div className="px-5 pb-10">
+          <div className="home-section-head home-section-head-mobile">
+            <h2 className="home-section-title">{t('home.recent')}</h2>
             <Link className="home-shelf-link" to={ROUTE_PATH.SHELF}>
               <span>{t('shelf.view')}</span>
               <HomeArrowRightIcon style={{ width: 14, height: 14 }} />
             </Link>
           </div>
-          <div className="flex flex-row flex-wrap justify-start items-center">
-            <ImportCard
-              className="w-24 h-36 bg-front-bg-color-3 p-5 cursor-pointer justify-center rounded-xl mr-6 items-center flex hover:scale-110 transition-all mt-5"
-              iconSize={54}
-              onAdd={onAdd}
-            />
+          <div className="home-book-grid home-book-grid-mobile">
+            <ImportCard className="home-import-card home-import-card-mobile" iconSize={32} onAdd={onAdd} />
             {recentBookList.map((book) => (
               <BookCard book={book} key={book.id} />
             ))}

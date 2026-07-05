@@ -1,31 +1,29 @@
 import { useHref, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import type { BookInfo } from '@/store/books';
-import {
-  createEmptyReaderSearchHighlight,
-  setCurrentBookDetail,
-  setPageNum,
-  setReaderNavigationTarget,
-  setReaderSearchHighlight,
-  setTextSyntaxTree,
-} from '@/lib/subscribe';
-import { createEmptyTextSyntaxTree } from '@/lib/transformText';
+import { clearReaderSignals } from '@/lib/subscribe';
 import { startSpaViewTransition } from '@/lib/navigation';
 import { createReaderPath } from '@/router';
 import { useIsMobile } from '@/lib/hooks';
 import { useResolvedBookImage } from '@/lib/useResolvedBookImage';
+import { getReaderProgress } from '@/lib/readerProgress';
+import { getReaderBookStatus } from '@/lib/readerBookStatus';
+import { t } from '@/locales';
 import './index.scss';
 
 interface BookCardProps {
   book: BookInfo;
 }
 
-const clearReaderSignals = () => {
-  setPageNum(0);
-  setCurrentBookDetail(null);
-  setReaderNavigationTarget({ revision: 0 });
-  setReaderSearchHighlight(createEmptyReaderSearchHighlight());
-  setTextSyntaxTree(createEmptyTextSyntaxTree());
+// "已读 12%" / "未读" / "读完" — mirrors the WeRead recent-reading card label.
+export const getBookProgressLabel = (bookId: string | undefined): string => {
+  if (!bookId) return t('book.progress.unread');
+  if (getReaderBookStatus(bookId) === 'finished') return t('book.progress.finished');
+  const percent = getReaderProgress(bookId)?.readPercent;
+  if (typeof percent === 'number' && Number.isFinite(percent) && percent > 0) {
+    return t('book.progress.read', [Math.min(Math.round(percent), 100)]);
+  }
+  return t('book.progress.unread');
 };
 
 const useBookCardNavigate = (id: string | number | undefined) => {
@@ -41,24 +39,25 @@ const useBookCardNavigate = (id: string | number | undefined) => {
   };
 };
 
-const DESKTOP_CARD_CLASS =
-  'w-2xs h-40 bg-front-bg-color-3 p-5 cursor-pointer rounded-xl mr-6 items-center flex hover:scale-110 transition-all mt-5';
-
-const MOBILE_CARD_CLASS =
-  'w-24 h-36 bg-front-bg-color-3 p-3 cursor-pointer rounded-xl mr-6 items-center flex hover:scale-110 transition-all mt-5';
-
 export const BookCoverFallback = ({
   className = '',
-  itemId,
   title = '',
 }: {
   className?: string;
-  itemId?: string;
   title?: string;
 }): React.JSX.Element => {
   return (
-    <div className={`book-cover-fallback ${className}`} aria-hidden="true" item-id={itemId} title={title}>
-      <svg xmlns="http://www.w3.org/2000/svg" width="60%" height="60%" fill-opacity="0.3" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 19V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v13H7a2 2 0 0 0-2 2m0 0a2 2 0 0 0 2 2h12M9 3v14m7 0v4"/></svg>
+    <div className={`book-cover-fallback ${className}`} aria-hidden="true" title={title}>
+      <svg xmlns="http://www.w3.org/2000/svg" width="60%" height="60%" fill-opacity="0.3" viewBox="0 0 24 24">
+        <path
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M5 19V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v13H7a2 2 0 0 0-2 2m0 0a2 2 0 0 0 2 2h12M9 3v14m7 0v4"
+        />
+      </svg>
     </div>
   );
 };
@@ -71,6 +70,7 @@ export const BookCard = ({ book }: BookCardProps): React.JSX.Element => {
   const resolvedImage = useResolvedBookImage(id, image);
   const [imageFailed, setImageFailed] = useState(false);
   const shouldShowImage = Boolean(resolvedImage && !imageFailed);
+  const progressLabel = getBookProgressLabel(id);
   useEffect(() => {
     setImageFailed(false);
   }, [id, image]);
@@ -80,39 +80,25 @@ export const BookCard = ({ book }: BookCardProps): React.JSX.Element => {
       onClick={onClick}
       href={href}
       style={{ viewTransitionName: `book-info-${id}` }}
-      className={`book-card-item ${isMobile ? MOBILE_CARD_CLASS : DESKTOP_CARD_CLASS}`}
+      className={`book-card-item ${isMobile ? 'book-card-mobile' : 'book-card-desktop'}`}
     >
-      {!isMobile && (
-        <div className="grow-0">
-          {shouldShowImage ? (
-            <img
-              className="h-28 object-cover mr-5"
-              src={resolvedImage}
-              alt={title}
-              onError={() => setImageFailed(true)}
-            />
-          ) : (
-            <BookCoverFallback className="h-28 w-20 mr-5" title={title} />
-          )}
-        </div>
-      )}
-      <div className={isMobile ? 'grow shrink basis-0 w-full overflow-hidden' : 'grow shrink basis-0 min-w-36'}>
-        <div
-          className={
-            isMobile
-              ? 'book-card-mobile-title text-text-color-1 font-medium break-all'
-              : 'text-text-color-1 font-medium truncate break-all'
-          }
-          title={isMobile ? title : undefined}
-        >
+      <div className="book-card-cover">
+        {shouldShowImage ? (
+          <img src={resolvedImage} alt={title} onError={() => setImageFailed(true)} />
+        ) : (
+          <BookCoverFallback title={title} />
+        )}
+      </div>
+      <div className="book-card-info">
+        <div className="book-card-title" title={title}>
           {title}
         </div>
-        <div
-          className={`text-sm text-text-color-2 mt-2 ${isMobile ? 'truncate' : ''}`}
-          title={isMobile ? author : undefined}
-        >
-          {author}
-        </div>
+        {author && (
+          <div className="book-card-author" title={author}>
+            {author}
+          </div>
+        )}
+        <div className="book-card-progress">{progressLabel}</div>
       </div>
     </a>
   );

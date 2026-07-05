@@ -1,8 +1,5 @@
 import { db } from '@/store';
-import {
-  READER_READING_TIME_DAILY_STORE_NAME,
-  READER_READING_TIME_SEGMENTS_STORE_NAME,
-} from '@/lib/readerStoreNames';
+import { READER_READING_TIME_DAILY_STORE_NAME, READER_READING_TIME_SEGMENTS_STORE_NAME } from '@/lib/readerStoreNames';
 import { createRandomId } from '@/lib/utils';
 import type { ReaderReadingMode } from '@/lib/readerSettings';
 
@@ -135,7 +132,9 @@ export const recordReaderReadingTime = (input: ReaderReadingTimeInput): number =
   return segments.reduce((sum, segment) => sum + segment.durationMs, 0);
 };
 
-export const getReaderReadingTimeSummary = (bookId?: string): {
+export const getReaderReadingTimeSummary = (
+  bookId?: string,
+): {
   daily: ReaderReadingTimeDailyAggregate[];
   readingDays: number;
   totalMs: number;

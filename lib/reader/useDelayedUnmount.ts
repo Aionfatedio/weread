@@ -4,7 +4,7 @@ const READER_OVERLAY_UNMOUNT_DELAY_MS = 140;
 
 // Keeps an overlay (selection menu / note modal) mounted briefly after `state`
 // becomes null so the CSS close animation can run, then unmounts.
-export const useDelayedUnmount = <T,>(state: T | null): { renderState: T | null; isClosing: boolean } => {
+export const useDelayedUnmount = <T>(state: T | null): { renderState: T | null; isClosing: boolean } => {
   const [renderState, setRenderState] = useState<T | null>(state);
   const [isClosing, setIsClosing] = useState(false);
   const closeTimerRef = useRef<number | null>(null);

@@ -1,4 +1,5 @@
 import { Index } from 'flexsearch';
+import { BOOKS_INFO_STORE_NAME } from '@/lib/readerStoreNames';
 import { findKeywordSentenceMatches } from '@/lib/searchText';
 import { getErrorMessage } from '@/lib/utils';
 
@@ -22,7 +23,7 @@ interface BookSearchHit extends BookRecord {
 
 type OperationType = 'search' | 'add' | 'put' | 'getAll' | 'get' | 'delete';
 
-const STORE_NAME = 'books_info';
+const STORE_NAME = BOOKS_INFO_STORE_NAME;
 
 const DEFAULT_CONTENT_SEARCH_LIMIT = 50;
 
@@ -117,15 +118,15 @@ const ensureContentIndex = (database: IDBDatabase): Promise<void> => {
       };
 
       request.onerror = () => {
-        contentIndexBuilding = null;
         reject(new Error(request.error?.message || 'Failed to build search index'));
       };
     } catch (error) {
-      contentIndexBuilding = null;
       reject(error instanceof Error ? error : new Error(getErrorMessage(error)));
     }
   });
 
+  // Reset on failure so the next search retries the build instead of caching
+  // a rejected promise forever.
   contentIndexBuilding.catch(() => {
     contentIndexBuilding = null;
   });
@@ -274,12 +275,7 @@ const runWrite = (
   };
 };
 
-const runDelete = (
-  transaction: IDBTransaction,
-  store: IDBObjectStore,
-  key: string,
-  operationId: string,
-): void => {
+const runDelete = (transaction: IDBTransaction, store: IDBObjectStore, key: string, operationId: string): void => {
   const request = store.delete(key);
   let requestSucceeded = false;
   request.onsuccess = () => {
@@ -306,9 +302,20 @@ const runDelete = (
 };
 
 const runGetAll = (store: IDBObjectStore, operationId: string): void => {
-  const request = store.getAll();
+  // Cursor + per-record projection instead of getAll(): materialising every
+  // book's multi-megabyte rawText/chapter HTML at once just to strip it out
+  // again would spike worker memory proportionally to the whole library.
+  const request = store.openCursor();
+  const data: Record<string, unknown>[] = [];
   request.onsuccess = () => {
-    const data = (request.result as unknown[]).filter(isValidBook).map(projectBookForList);
+    const cursor = request.result;
+    if (cursor) {
+      if (isValidBook(cursor.value)) {
+        data.push(projectBookForList(cursor.value));
+      }
+      cursor.continue();
+      return;
+    }
     postSuccess(operationId, data);
   };
   request.onerror = () => {
@@ -388,7 +395,7 @@ const openTransaction = async (
   dbName: string,
   storeName: string,
   mode: IDBTransactionMode,
-): Promise<{ transaction: IDBTransaction; store: IDBObjectStore }> => {
+): Promise<{ database: IDBDatabase; transaction: IDBTransaction; store: IDBObjectStore }> => {
   // If the cached DB was closed (versionchange/onclose), the first attempt
   // throws InvalidStateError. Dispose and retry once to transparently
   // reconnect — without this, every operation after a schema upgrade fails.
@@ -397,7 +404,7 @@ const openTransaction = async (
     try {
       const transaction = database.transaction(storeName, mode);
       const store = transaction.objectStore(storeName);
-      return { transaction, store };
+      return { database, transaction, store };
     } catch (error) {
       if (attempt === 0) {
         disposeCachedDB();
@@ -412,16 +419,13 @@ const openTransaction = async (
 self.onmessage = async (e: MessageEvent<WorkerInboundMessage>) => {
   const { type, data, dbName, storeName, operationId } = e.data;
   try {
-    const mode: IDBTransactionMode =
-      type === 'add' || type === 'put' || type === 'delete' ? 'readwrite' : 'readonly';
-    const { transaction, store } = await openTransaction(dbName, storeName, mode);
+    const mode: IDBTransactionMode = type === 'add' || type === 'put' || type === 'delete' ? 'readwrite' : 'readonly';
+    const { database, transaction, store } = await openTransaction(dbName, storeName, mode);
 
     switch (type) {
-      case 'search': {
-        const database = await getDatabase(dbName);
+      case 'search':
         await runSearch(store, database, data as SearchPayload, operationId);
         break;
-      }
       case 'add':
         runWrite(transaction, store, (data as { bookInfo: BookRecord }).bookInfo, operationId, 'add');
         break;

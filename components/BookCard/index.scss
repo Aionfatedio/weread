@@ -1,25 +1,46 @@
-// @keyframes clip {
-//     from {
-//       clip-path: circle(0%);
-//     }
-//     to{
-//       clip-path: circle(100%);
-//     }
-//   }
-
-// ::view-transition-old(book-info) {
-//   display: none;
-//   animation: none;
-//   animation-duration: 0.5s;
-// }
-
-// `content-visibility: auto` lets the browser skip layout/paint for cards
-// that are off-screen. `contain-intrinsic-size` keeps the scrollbar honest
-// while those cards are skipped, so a large library scrolls smoothly without
-// needing a JS virtual-list dependency.
+// WeRead-style book cards. `content-visibility: auto` lets the browser skip
+// layout/paint for cards that are off-screen; `contain-intrinsic-size` keeps
+// the scrollbar honest while those cards are skipped, so a large library
+// scrolls smoothly without a JS virtual list.
 .book-card-item {
   content-visibility: auto;
-  contain-intrinsic-size: 160px 160px;
+  contain-intrinsic-size: 168px 218px;
+  display: flex;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    transform 0.22s ease,
+    box-shadow 0.22s ease,
+    background-color 0.22s ease;
+}
+
+// Book-like cover: sharp spine on the left, soft corners on the right, a
+// subtle spine highlight and a grounded shadow.
+.book-card-cover {
+  position: relative;
+  flex: 0 0 auto;
+  border-radius: 2px 6px 6px 2px;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.16),
+    0 1px 3px rgba(0, 0, 0, 0.1);
+  background: var(--front-bg-color-2);
+  overflow: hidden;
+
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    background: linear-gradient(90deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0));
+    pointer-events: none;
+  }
 }
 
 .book-cover-fallback {
@@ -28,28 +49,123 @@
   justify-content: center;
   flex: 0 0 auto;
   border-radius: 6px;
-  background: linear-gradient(135deg, rgba(27, 136, 238, 0.12), rgba(27, 136, 238, 0.02)), var(--front-bg-color-2);
+  background: linear-gradient(135deg, rgba(27, 136, 238, 0.14), rgba(27, 136, 238, 0.03)), var(--front-bg-color-2);
   color: var(--text-color-2);
-  font-size: 28px;
+}
+
+// Inside a card cover the fallback fills the fixed-size cover box (the box
+// owns the rounding); standalone usages (search result rows) size it via
+// their own utility classes instead.
+.book-card-cover .book-cover-fallback {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+}
+
+.book-card-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.book-card-title {
+  color: var(--text-color-1);
   font-weight: 600;
-  line-height: 1;
-}
-
-.book-cover-fallback span {
-  transform: translateY(-1px);
-}
-
-.book-card-mobile-title {
+  line-height: 1.45;
   display: -webkit-box;
   overflow: hidden;
-  max-height: 4.5em;
-  line-height: 1.5;
   text-overflow: ellipsis;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
-// ::view-transition-new(book-info) {
-//   mix-blend-mode: normal;
-//   animation: clip 0.5s ease-in;
-// }
+
+.book-card-author {
+  color: var(--text-color-2);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.book-card-progress {
+  margin-top: auto;
+  color: var(--text-color-3);
+  font-size: 12px;
+}
+
+// Desktop: horizontal card — cover left, meta right (WeRead "recent" row).
+.book-card-desktop {
+  width: 264px;
+  padding: 20px;
+  margin: 20px 24px 0 0;
+  border-radius: 12px;
+  background: var(--front-bg-color-3);
+  border: 1px solid var(--border-color-1);
+
+  .book-card-cover {
+    width: 84px;
+    height: 118px;
+    margin-right: 16px;
+  }
+
+  .book-card-info {
+    flex: 1 1 auto;
+    padding: 2px 0;
+  }
+
+  .book-card-title {
+    font-size: 15px;
+  }
+
+  .book-card-author {
+    margin-top: 6px;
+  }
+
+  &:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.12);
+  }
+}
+
+// Mobile: vertical card — cover on top, title/progress below (WeRead grid).
+.book-card-mobile {
+  width: 96px;
+  flex-direction: column;
+  margin: 20px 18px 0 0;
+
+  .book-card-cover {
+    width: 96px;
+    height: 134px;
+  }
+
+  .book-card-info {
+    padding-top: 8px;
+  }
+
+  .book-card-title {
+    font-size: 13px;
+  }
+
+  .book-card-author {
+    display: none;
+  }
+
+  .book-card-progress {
+    margin-top: 4px;
+  }
+
+  &:active .book-card-cover {
+    transform: scale(0.97);
+  }
+}
+
+:root[theme='dark'] .book-card-cover {
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.45),
+    0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+:root[theme='dark'] .book-card-desktop:hover {
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
+}
