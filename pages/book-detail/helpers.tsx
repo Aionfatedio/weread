@@ -7,10 +7,13 @@ import type React from 'react';
 import { OcticonChevronLeft, OcticonChevronRight } from '@/components/Octicon';
 import { ROUTE_PATH } from '@/router';
 import { getCurrentBookDetail, getTextSyntaxTree, setCurrentBookDetail, setTextSyntaxTree } from '@/lib/subscribe';
+import type { ReaderNavigationTarget } from '@/lib/subscribe';
 import { resumeDB } from '@/store';
 import { getBookById } from '@/store/books';
 import type { BookInfo } from '@/store/books';
 import type { ReaderPageTurnEffect } from '@/lib/readerSettings';
+import type { TextSyntaxTree } from '@/lib/transformText';
+import { isValidTitleId } from '@/lib/reader/chapterStructure';
 import { getCachedTextSyntaxTree } from '@/lib/reader/textSyntaxTreeCache';
 
 export const MOBILE_ICON_STYLE = {
@@ -37,6 +40,59 @@ export const hasRecordChanged = (prev: Record<string, number>, next: Record<stri
 export const hasArrayChanged = (prev: number[], next: number[]): boolean => {
   if (prev.length !== next.length) return true;
   return next.some((value, index) => prev[index] !== value);
+};
+
+// Clamp a navigation target's page into the target block's own page span.
+// Shared by the paged pending-locator path and both scroll-mode derivations.
+export const resolveNavigationBlockPageOffset = (
+  target: ReaderNavigationTarget,
+  blockStartPage: number | undefined,
+  blockEndPage: number | undefined,
+): number | undefined => {
+  if (typeof target.blockPageOffset === 'number' && Number.isFinite(target.blockPageOffset)) {
+    return target.blockPageOffset;
+  }
+  if (typeof target.page === 'number' && Number.isFinite(target.page) && blockStartPage !== undefined) {
+    return Math.min(
+      Math.max(target.page - blockStartPage, 0),
+      Math.max((blockEndPage ?? blockStartPage) - blockStartPage, 0),
+    );
+  }
+  return undefined;
+};
+
+export interface ScrollNavigationState {
+  hasActiveScrollNavigation: boolean;
+  scrollTargetBlockId?: string;
+  scrollTargetBlockPageOffset?: number;
+  scrollTargetBlockRatio?: number;
+  scrollTargetPage?: number;
+}
+
+// Scroll-mode navigation derivation shared by the desktop and mobile readers.
+export const deriveScrollNavigation = (
+  target: ReaderNavigationTarget,
+  textSyntaxTree: TextSyntaxTree,
+  effectiveScrollTitleId: number | undefined,
+): ScrollNavigationState => {
+  const block = target.blockId ? textSyntaxTree.blocks.find((item) => item.id === target.blockId) : undefined;
+  const navigationTitleId = isValidTitleId(textSyntaxTree, target.titleId) ? target.titleId : block?.titleId;
+  const hasActiveScrollNavigation = target.revision > 0 && navigationTitleId === effectiveScrollTitleId;
+  if (!hasActiveScrollNavigation) return { hasActiveScrollNavigation };
+
+  const blockStartPage = block ? textSyntaxTree.blockIdPage[block.id] : undefined;
+  const blockEndPage = block ? (textSyntaxTree.blockIdPageEnd[block.id] ?? blockStartPage) : undefined;
+  const hasTargetPage = typeof target.page === 'number' && Number.isFinite(target.page);
+  return {
+    hasActiveScrollNavigation,
+    scrollTargetBlockId: target.blockId,
+    scrollTargetBlockPageOffset: resolveNavigationBlockPageOffset(target, blockStartPage, blockEndPage),
+    scrollTargetBlockRatio:
+      block && typeof target.matchStart === 'number' && Number.isFinite(target.matchStart)
+        ? Math.min(Math.max(target.matchStart / Math.max(block.text.length, 1), 0), 1)
+        : undefined,
+    scrollTargetPage: hasTargetPage ? target.page : undefined,
+  };
 };
 
 export const runPageTurn = (effect: ReaderPageTurnEffect, update: () => void): void => {

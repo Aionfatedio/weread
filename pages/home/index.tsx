@@ -339,6 +339,94 @@ const getImportFailureMessage = (file: File, error: unknown): string => {
   return t('import.file_failed', [file.name]);
 };
 
+interface AddBookResolvingConflictsOptions {
+  // Deletes the stale per-book data that must not survive an overwrite.
+  // Backups restore their own user data afterwards, so they only drop the
+  // pagination caches; plain re-imports wipe progress/annotations too.
+  clearExistingData: (bookId: string) => Promise<void> | void;
+  failureLabel: string;
+  file: File;
+  // Matches a shelf book that IS the incoming one (id/fingerprint identity).
+  findSameBook: (book: BookInfo) => boolean;
+  fingerprint: string;
+  // Explicit id for the fresh-add path (backups keep their original book id).
+  freshBookId?: string;
+  imported: ImportedBookData;
+  // Plain re-imports keep the shelf title the user may have deduplicated;
+  // backup restores bring back the archived title.
+  keepExistingTitleOnOverwrite: boolean;
+  onPersisted?: (bookId: string) => Promise<void>;
+  requestConflictDecision: (state: ImportConflictState) => Promise<ImportConflictDecision>;
+  showApplyToRemaining: boolean;
+  workingBooks: BookInfo[];
+}
+
+// Shared conflict flow for every import source (book file or full backup):
+// same-book → ask, overwrite in place; same-title → ask, overwrite or keep
+// both; otherwise add as a new book under a de-duplicated title.
+const addBookResolvingConflicts = async (
+  options: AddBookResolvingConflictsOptions,
+): Promise<{ book?: BookInfo; cancelled: boolean }> => {
+  const { file, fingerprint, imported, requestConflictDecision, showApplyToRemaining, workingBooks } = options;
+
+  const persist = async (data: { id?: string; overwrite?: boolean; title?: string }): Promise<BookInfo> => {
+    const result = await addBook({ ...imported, fingerprint, ...data });
+    if (result.error || !result.data) {
+      throw new Error(result.message || `${options.failureLabel}: ${file.name}`);
+    }
+    if (options.onPersisted) await options.onPersisted(result.data.id);
+    return result.data;
+  };
+
+  const overwriteExisting = async (existingBook: BookInfo): Promise<BookInfo> => {
+    await options.clearExistingData(existingBook.id);
+    return persist({
+      id: existingBook.id,
+      overwrite: true,
+      ...(options.keepExistingTitleOnOverwrite ? { title: existingBook.title } : {}),
+    });
+  };
+
+  const existingSameBook = workingBooks.find(options.findSameBook);
+  if (existingSameBook) {
+    const decision = await requestConflictDecision(
+      createImportConflictState({
+        existingBook: existingSameBook,
+        file,
+        imported,
+        showApplyToRemaining,
+        type: 'same-book',
+      }),
+    );
+    if (decision.action === 'cancel') return { cancelled: true };
+    return { book: await overwriteExisting(existingSameBook), cancelled: false };
+  }
+
+  const importedTitle = normalizeBookTitle(imported.title);
+  const existingSameTitleBook = workingBooks.find(
+    (book) => normalizeBookTitle(book.title) === importedTitle && getBookIdentity(book) !== fingerprint,
+  );
+  if (existingSameTitleBook) {
+    const decision = await requestConflictDecision(
+      createImportConflictState({
+        existingBook: existingSameTitleBook,
+        file,
+        imported,
+        showApplyToRemaining,
+        type: 'same-title',
+      }),
+    );
+    if (decision.action === 'cancel') return { cancelled: true };
+    if (decision.action === 'overwrite') {
+      return { book: await overwriteExisting(existingSameTitleBook), cancelled: false };
+    }
+    // keepBoth falls through to a fresh add under a de-duplicated title.
+  }
+
+  const title = resolveUniqueBookTitle(imported.title, workingBooks, fingerprint);
+  return { book: await persist({ id: options.freshBookId, title }), cancelled: false };
+};
+
 export const ImportConflictDialog = ({
   state,
   onCancel,
@@ -605,90 +693,33 @@ export const useHomeBookImport = (
               const imported = createImportedBookDataFromBackup(archive);
               const documentFingerprint = await getBookFingerprint(imported);
               const fingerprint = imported.fingerprint || documentFingerprint;
-              const existingSameBook = workingBooks.find((book) => {
-                const identity = getBookIdentity(book);
-                return (
-                  book.id === archive.book.id ||
-                  identity === backupIdentity ||
-                  identity === fingerprint ||
-                  identity === documentFingerprint
-                );
-              });
-              const importedTitle = normalizeBookTitle(imported.title);
-
-              if (existingSameBook) {
-                const decision = await requestConflictDecision(
-                  createImportConflictState({
-                    existingBook: existingSameBook,
-                    file,
-                    imported,
-                    showApplyToRemaining,
-                    type: 'same-book',
-                  }),
-                );
-                if (decision.action === 'cancel') continue;
-                clearChapterPaginationCache(existingSameBook.id);
-                void deletePersistedChapterPageCounts(existingSameBook.id);
-                const result = await addBook({
-                  ...imported,
-                  fingerprint,
-                  id: existingSameBook.id,
-                  overwrite: true,
-                });
-                if (result.error || !result.data) {
-                  throw new Error(result.message || `Failed to restore backup: ${file.name}`);
-                }
-                await restoreBackupUserData({ archive, targetBookId: result.data.id });
-                workingBooks = upsertBookListItem(workingBooks, result.data);
-                importedCount += 1;
-                continue;
-              }
-
-              const existingSameTitleBook = workingBooks.find(
-                (book) => normalizeBookTitle(book.title) === importedTitle && getBookIdentity(book) !== fingerprint,
-              );
-              if (existingSameTitleBook) {
-                const decision = await requestConflictDecision(
-                  createImportConflictState({
-                    existingBook: existingSameTitleBook,
-                    file,
-                    imported,
-                    showApplyToRemaining,
-                    type: 'same-title',
-                  }),
-                );
-                if (decision.action === 'cancel') continue;
-                if (decision.action === 'overwrite') {
-                  clearChapterPaginationCache(existingSameTitleBook.id);
-                  void deletePersistedChapterPageCounts(existingSameTitleBook.id);
-                  const result = await addBook({
-                    ...imported,
-                    fingerprint,
-                    id: existingSameTitleBook.id,
-                    overwrite: true,
-                  });
-                  if (result.error || !result.data) {
-                    throw new Error(result.message || `Failed to restore backup: ${file.name}`);
-                  }
-                  await restoreBackupUserData({ archive, targetBookId: result.data.id });
-                  workingBooks = upsertBookListItem(workingBooks, result.data);
-                  importedCount += 1;
-                  continue;
-                }
-              }
-
-              const title = resolveUniqueBookTitle(imported.title, workingBooks, fingerprint);
-              const result = await addBook({
-                ...imported,
+              const outcome = await addBookResolvingConflicts({
+                clearExistingData: (bookId) => {
+                  clearChapterPaginationCache(bookId);
+                  void deletePersistedChapterPageCounts(bookId);
+                },
+                failureLabel: 'Failed to restore backup',
+                file,
+                findSameBook: (book) => {
+                  const identity = getBookIdentity(book);
+                  return (
+                    book.id === archive.book.id ||
+                    identity === backupIdentity ||
+                    identity === fingerprint ||
+                    identity === documentFingerprint
+                  );
+                },
                 fingerprint,
-                id: archive.book.id,
-                title,
+                freshBookId: archive.book.id,
+                imported,
+                keepExistingTitleOnOverwrite: false,
+                onPersisted: (bookId) => restoreBackupUserData({ archive, targetBookId: bookId }),
+                requestConflictDecision,
+                showApplyToRemaining,
+                workingBooks,
               });
-              if (result.error || !result.data) {
-                throw new Error(result.message || `Failed to restore backup: ${file.name}`);
-              }
-              await restoreBackupUserData({ archive, targetBookId: result.data.id });
-              workingBooks = upsertBookListItem(workingBooks, result.data);
+              if (outcome.cancelled || !outcome.book) continue;
+              workingBooks = upsertBookListItem(workingBooks, outcome.book);
               importedCount += 1;
               continue;
             }
@@ -720,81 +751,23 @@ export const useHomeBookImport = (
           const imported = await importBookFileWithFallback(file);
           const documentFingerprint = await getBookFingerprint(imported);
           const fingerprint = imported.fingerprint || documentFingerprint;
-          const existingSameBook = workingBooks.find((book) => {
-            const identity = getBookIdentity(book);
-            return identity === fingerprint || identity === documentFingerprint;
-          });
-          const importedTitle = normalizeBookTitle(imported.title);
-
-          if (existingSameBook) {
-            const decision = await requestConflictDecision(
-              createImportConflictState({
-                existingBook: existingSameBook,
-                file,
-                imported,
-                showApplyToRemaining,
-                type: 'same-book',
-              }),
-            );
-            if (decision.action === 'cancel') continue;
-            await clearReaderBookData(existingSameBook.id);
-            const result = await addBook({
-              ...imported,
-              fingerprint,
-              id: existingSameBook.id,
-              overwrite: true,
-              title: existingSameBook.title,
-            });
-            if (result.error || !result.data) {
-              throw new Error(result.message || `Failed to overwrite book: ${file.name}`);
-            }
-            workingBooks = upsertBookListItem(workingBooks, result.data);
-            importedCount += 1;
-            continue;
-          }
-
-          const existingSameTitleBook = workingBooks.find(
-            (book) => normalizeBookTitle(book.title) === importedTitle && getBookIdentity(book) !== fingerprint,
-          );
-          if (existingSameTitleBook) {
-            const decision = await requestConflictDecision(
-              createImportConflictState({
-                existingBook: existingSameTitleBook,
-                file,
-                imported,
-                showApplyToRemaining,
-                type: 'same-title',
-              }),
-            );
-            if (decision.action === 'cancel') continue;
-            if (decision.action === 'overwrite') {
-              await clearReaderBookData(existingSameTitleBook.id);
-              const result = await addBook({
-                ...imported,
-                fingerprint,
-                id: existingSameTitleBook.id,
-                overwrite: true,
-                title: existingSameTitleBook.title,
-              });
-              if (result.error || !result.data) {
-                throw new Error(result.message || `Failed to overwrite book: ${file.name}`);
-              }
-              workingBooks = upsertBookListItem(workingBooks, result.data);
-              importedCount += 1;
-              continue;
-            }
-          }
-
-          const title = resolveUniqueBookTitle(imported.title, workingBooks, fingerprint);
-          const result = await addBook({
-            ...imported,
+          const outcome = await addBookResolvingConflicts({
+            clearExistingData: (bookId) => clearReaderBookData(bookId),
+            failureLabel: 'Failed to import book',
+            file,
+            findSameBook: (book) => {
+              const identity = getBookIdentity(book);
+              return identity === fingerprint || identity === documentFingerprint;
+            },
             fingerprint,
-            title,
+            imported,
+            keepExistingTitleOnOverwrite: true,
+            requestConflictDecision,
+            showApplyToRemaining,
+            workingBooks,
           });
-          if (result.error || !result.data) {
-            throw new Error(result.message || `Failed to add book: ${file.name}`);
-          }
-          workingBooks = upsertBookListItem(workingBooks, result.data);
+          if (outcome.cancelled || !outcome.book) continue;
+          workingBooks = upsertBookListItem(workingBooks, outcome.book);
           importedCount += 1;
         } catch (error) {
           failedCount += 1;
