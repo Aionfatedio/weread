@@ -16,8 +16,12 @@
 .reader-user-select-disabled r-icon,
 .reader-user-select-disabled .readerControls,
 .reader-user-select-disabled .reader-page-title-label,
-.reader-user-select-disabled .reader-scroll-chapter-nav,
-.reader-user-select-disabled /* Long book titles must ellipsize instead of flex-squeezing the sibling
+.reader-user-select-disabled .reader-scroll-chapter-nav {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Long book titles must ellipsize instead of flex-squeezing the sibling
    nav links (Home / My shelf) out of shape. */
 .reader-topbar-title {
   min-width: 0;
