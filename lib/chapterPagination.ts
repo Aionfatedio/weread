@@ -1,4 +1,5 @@
 import { db } from '@/store';
+import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
 import { CHAPTER_PAGE_COUNTS_STORE_NAME } from '@/lib/readerStoreNames';
 import type { ReaderBlock } from '@/lib/transformText';
 
@@ -234,10 +235,12 @@ export const persistChapterPageCount = (
       pageCountsWriteTimers.delete(key);
       const latestCounts = pageCountsCache.get(key);
       if (!latestCounts) return;
-      void db.update<PersistedChapterPageCounts>({
-        data: { key, bookId, counts: latestCounts, updatedAt: Date.now() },
-        storeName: CHAPTER_PAGE_COUNTS_STORE_NAME,
-      });
+      trackPersistResult(
+        db.update<PersistedChapterPageCounts>({
+          data: { key, bookId, counts: latestCounts, updatedAt: Date.now() },
+          storeName: CHAPTER_PAGE_COUNTS_STORE_NAME,
+        }),
+      );
     }, PAGE_COUNTS_WRITE_DEBOUNCE_MS),
   );
 };
@@ -256,11 +259,13 @@ export const deletePersistedChapterPageCounts = async (bookId: string): Promise<
     }
   }
   hydratedPageCountsBooks.delete(bookId);
-  await db.deleteByCursor({
-    storeName: CHAPTER_PAGE_COUNTS_STORE_NAME,
-    indexName: 'bookId',
-    keyRange: IDBKeyRange.only(bookId),
-  });
+  reportPersistResult(
+    await db.deleteByCursor({
+      storeName: CHAPTER_PAGE_COUNTS_STORE_NAME,
+      indexName: 'bookId',
+      keyRange: IDBKeyRange.only(bookId),
+    }),
+  );
 };
 
 // ---------------------------------------------------------------------------

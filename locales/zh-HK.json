@@ -167,6 +167,7 @@
   "backup.user_data_only": "該 BDZ 只包含使用者資料，缺少書籍本體",
   "route.load_failed": "頁面載入失敗，可能是應用已更新",
   "route.reload": "重新整理",
+  "storage.write_failed": "數據保存失敗，瀏覽器儲存空間可能已滿，請匯出備份以免遺失數據",
   "book.progress.read": "已讀 {{0}}%",
   "book.progress.unread": "未讀",
   "book.progress.finished": "讀完",

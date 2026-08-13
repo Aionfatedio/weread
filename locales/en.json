@@ -167,6 +167,7 @@
   "backup.user_data_only": "This BDZ only contains user data and has no book content",
   "route.load_failed": "Failed to load this page — the app may have been updated",
   "route.reload": "Reload",
+  "storage.write_failed": "Failed to save data — browser storage may be full. Export a backup to avoid losing data.",
   "book.progress.read": "{{0}}% read",
   "book.progress.unread": "Unread",
   "book.progress.finished": "Finished",

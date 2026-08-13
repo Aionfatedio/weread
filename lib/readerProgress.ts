@@ -1,6 +1,7 @@
 import type { ReaderBlock, TextSyntaxTree } from '@/lib/transformText';
 import { EVENT_NAME, syncHook } from '@/lib/subscribe';
 import { db } from '@/store';
+import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
 import { recordReaderReadingTime } from '@/lib/readerReadingTime';
 import { READER_PROGRESS_STORE_NAME } from '@/lib/readerStoreNames';
 import { clampRatio } from '@/lib/utils';
@@ -58,10 +59,12 @@ const writeProgressMap = (value: Record<string, ReaderLocator>): void => {
 };
 
 const persistReaderProgress = (locator: ReaderLocator): void => {
-  void db.update<ReaderLocator>({
-    data: locator,
-    storeName: READER_PROGRESS_STORE_NAME,
-  });
+  trackPersistResult(
+    db.update<ReaderLocator>({
+      data: locator,
+      storeName: READER_PROGRESS_STORE_NAME,
+    }),
+  );
 };
 
 const getBlockPageEnd = (textSyntaxTree: TextSyntaxTree, blockId: string): number | undefined => {
@@ -403,7 +406,7 @@ export const deleteReaderProgress = async (bookId: string): Promise<void> => {
   delete map[bookId];
   writeProgressMap(map);
   syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
-  await db.delete({ key: bookId, storeName: READER_PROGRESS_STORE_NAME });
+  reportPersistResult(await db.delete({ key: bookId, storeName: READER_PROGRESS_STORE_NAME }));
 };
 
 export const restoreReaderProgressForBook = async ({
@@ -417,7 +420,7 @@ export const restoreReaderProgressForBook = async ({
   if (!progress) {
     delete map[bookId];
     writeProgressMap(map);
-    await db.delete({ key: bookId, storeName: READER_PROGRESS_STORE_NAME });
+    reportPersistResult(await db.delete({ key: bookId, storeName: READER_PROGRESS_STORE_NAME }));
     syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
     return;
   }
@@ -428,10 +431,12 @@ export const restoreReaderProgressForBook = async ({
   };
   map[bookId] = next;
   writeProgressMap(map);
-  await db.update<ReaderLocator>({
-    data: next,
-    storeName: READER_PROGRESS_STORE_NAME,
-  });
+  reportPersistResult(
+    await db.update<ReaderLocator>({
+      data: next,
+      storeName: READER_PROGRESS_STORE_NAME,
+    }),
+  );
   syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
 };
 

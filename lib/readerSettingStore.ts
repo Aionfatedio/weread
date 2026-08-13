@@ -1,4 +1,5 @@
 import { db } from '@/store';
+import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
 import { READER_SETTINGS_STORE_NAME } from '@/lib/readerStoreNames';
 import { safeReadStorage, safeWriteStorage } from '@/lib/utils';
 
@@ -27,14 +28,16 @@ export const writeCachedReaderSetting = (key: string, value: string): void => {
 
 export const persistReaderSetting = (key: string, value: string): void => {
   writeCachedReaderSetting(key, value);
-  void db.update<ReaderSettingRecord>({
-    data: {
-      key,
-      updatedAt: Date.now(),
-      value,
-    },
-    storeName: READER_SETTINGS_STORE_NAME,
-  });
+  trackPersistResult(
+    db.update<ReaderSettingRecord>({
+      data: {
+        key,
+        updatedAt: Date.now(),
+        value,
+      },
+      storeName: READER_SETTINGS_STORE_NAME,
+    }),
+  );
 };
 
 export const getAllReaderSettings = async (): Promise<ReaderSettingRecord[]> => {
@@ -48,14 +51,16 @@ export const restoreReaderSettings = async (records: ReaderSettingRecord[]): Pro
       .filter((record) => record?.key && typeof record.value === 'string')
       .map(async (record) => {
         writeCachedReaderSetting(record.key, record.value);
-        await db.update<ReaderSettingRecord>({
-          data: {
-            key: record.key,
-            updatedAt: Number.isFinite(record.updatedAt) ? record.updatedAt : Date.now(),
-            value: record.value,
-          },
-          storeName: READER_SETTINGS_STORE_NAME,
-        });
+        reportPersistResult(
+          await db.update<ReaderSettingRecord>({
+            data: {
+              key: record.key,
+              updatedAt: Number.isFinite(record.updatedAt) ? record.updatedAt : Date.now(),
+              value: record.value,
+            },
+            storeName: READER_SETTINGS_STORE_NAME,
+          }),
+        );
       }),
   );
 };

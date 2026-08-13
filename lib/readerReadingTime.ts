@@ -1,6 +1,8 @@
 import { db } from '@/store';
+import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
 import { READER_READING_TIME_DAILY_STORE_NAME, READER_READING_TIME_SEGMENTS_STORE_NAME } from '@/lib/readerStoreNames';
 import { createRandomId } from '@/lib/utils';
+import type { IDBResult } from '@/lib/indexedDB';
 import type { ReaderReadingMode } from '@/lib/readerSettings';
 
 export interface ReaderReadingTimeSegment {
@@ -101,10 +103,12 @@ const upsertDailyAggregate = (segment: ReaderReadingTimeSegment): void => {
     updatedAt: Date.now(),
   };
   dailyAggregateCache.set(id, next);
-  void db.update<ReaderReadingTimeDailyAggregate>({
-    data: next,
-    storeName: READER_READING_TIME_DAILY_STORE_NAME,
-  });
+  trackPersistResult(
+    db.update<ReaderReadingTimeDailyAggregate>({
+      data: next,
+      storeName: READER_READING_TIME_DAILY_STORE_NAME,
+    }),
+  );
 };
 
 export const hydrateReaderReadingTime = async (): Promise<void> => {
@@ -123,10 +127,12 @@ export const hydrateReaderReadingTime = async (): Promise<void> => {
 export const recordReaderReadingTime = (input: ReaderReadingTimeInput): number => {
   const segments = splitReadingTimeByLocalDay(input);
   segments.forEach((segment) => {
-    void db.add<ReaderReadingTimeSegment>({
-      data: segment,
-      storeName: READER_READING_TIME_SEGMENTS_STORE_NAME,
-    });
+    trackPersistResult(
+      db.add<ReaderReadingTimeSegment>({
+        data: segment,
+        storeName: READER_READING_TIME_SEGMENTS_STORE_NAME,
+      }),
+    );
     upsertDailyAggregate(segment);
   });
   return segments.reduce((sum, segment) => sum + segment.durationMs, 0);
@@ -192,7 +198,7 @@ export const restoreReaderReadingTimeForBook = async ({
     indexName: 'bookId',
     keyRange: IDBKeyRange.only(bookId),
   });
-  await Promise.all([...deleteDaily, deleteSegments]);
+  (await Promise.all([...deleteDaily, deleteSegments])).forEach(reportPersistResult);
 
   const restoreDaily = daily
     .filter((record) => record?.dayKey)
@@ -223,11 +229,11 @@ export const restoreReaderReadingTimeForBook = async ({
       });
     });
 
-  await Promise.all([...restoreDaily, ...restoreSegments]);
+  (await Promise.all([...restoreDaily, ...restoreSegments])).forEach(reportPersistResult);
 };
 
 export const deleteReaderReadingTimeForBook = async (bookId: string): Promise<void> => {
-  const pendingDeletes: Promise<unknown>[] = [];
+  const pendingDeletes: Promise<IDBResult<null>>[] = [];
   Array.from(dailyAggregateCache.values())
     .filter((record) => record.bookId === bookId)
     .forEach((record) => {
@@ -241,5 +247,5 @@ export const deleteReaderReadingTimeForBook = async (bookId: string): Promise<vo
       keyRange: IDBKeyRange.only(bookId),
     }),
   );
-  await Promise.all(pendingDeletes);
+  (await Promise.all(pendingDeletes)).forEach(reportPersistResult);
 };

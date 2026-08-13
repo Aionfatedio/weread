@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
 import { READER_BOOK_STATUS_STORE_NAME } from '@/lib/readerStoreNames';
 import { EVENT_NAME, syncHook } from '@/lib/subscribe';
 import { db } from '@/store';
@@ -26,10 +27,12 @@ const emitBookStatusChange = (): void => {
 };
 
 const persistReaderBookStatus = (record: ReaderBookStatusRecord): void => {
-  void db.update<ReaderBookStatusRecord>({
-    data: record,
-    storeName: READER_BOOK_STATUS_STORE_NAME,
-  });
+  trackPersistResult(
+    db.update<ReaderBookStatusRecord>({
+      data: record,
+      storeName: READER_BOOK_STATUS_STORE_NAME,
+    }),
+  );
 };
 
 export const hydrateReaderBookStatus = async (): Promise<void> => {
@@ -61,7 +64,7 @@ export const setReaderBookStatus = (bookId: string | undefined | null, status?: 
   if (!bookId) return;
   if (!isReaderBookStatus(status)) {
     delete bookStatusMapCache[bookId];
-    void db.delete({ key: bookId, storeName: READER_BOOK_STATUS_STORE_NAME });
+    trackPersistResult(db.delete({ key: bookId, storeName: READER_BOOK_STATUS_STORE_NAME }));
     emitBookStatusChange();
     return;
   }
@@ -80,7 +83,7 @@ export const deleteReaderBookStatus = async (bookId: string): Promise<void> => {
   if (!(bookId in bookStatusMapCache)) return;
   delete bookStatusMapCache[bookId];
   emitBookStatusChange();
-  await db.delete({ key: bookId, storeName: READER_BOOK_STATUS_STORE_NAME });
+  reportPersistResult(await db.delete({ key: bookId, storeName: READER_BOOK_STATUS_STORE_NAME }));
 };
 
 export const restoreReaderBookStatusForBook = async ({
@@ -92,7 +95,7 @@ export const restoreReaderBookStatusForBook = async ({
 }): Promise<void> => {
   if (!status || !isReaderBookStatus(status.status)) {
     delete bookStatusMapCache[bookId];
-    await db.delete({ key: bookId, storeName: READER_BOOK_STATUS_STORE_NAME });
+    reportPersistResult(await db.delete({ key: bookId, storeName: READER_BOOK_STATUS_STORE_NAME }));
     emitBookStatusChange();
     return;
   }
@@ -103,10 +106,12 @@ export const restoreReaderBookStatusForBook = async ({
     updatedAt: Number.isFinite(status.updatedAt) ? status.updatedAt : Date.now(),
   };
   bookStatusMapCache[bookId] = next;
-  await db.update<ReaderBookStatusRecord>({
-    data: next,
-    storeName: READER_BOOK_STATUS_STORE_NAME,
-  });
+  reportPersistResult(
+    await db.update<ReaderBookStatusRecord>({
+      data: next,
+      storeName: READER_BOOK_STATUS_STORE_NAME,
+    }),
+  );
   emitBookStatusChange();
 };
 

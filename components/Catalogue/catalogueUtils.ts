@@ -17,6 +17,9 @@ export const turnToCatalogueTitle = (event: Event): void => {
   const target = event.target as HTMLElement;
   if (target.closest('[data-reader-catalog-bookmark]')) return;
   const index = target.closest<HTMLElement>('[data-title-id]')?.dataset.titleId || '';
+  // Guard the empty string explicitly: Number('') is 0, which would pass the
+  // isFinite check and misnavigate clicks on list gaps to the first chapter.
+  if (!index) return;
   const titleId = Number(index);
   if (!Number.isFinite(titleId)) return;
   const textSyntaxTree: TextSyntaxTree = getTextSyntaxTree();
