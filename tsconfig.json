@@ -24,7 +24,6 @@
       "@/router/*": ["./router/*"],
       "@/lib/*": ["./lib/*"],
       "@/store/*": ["./store/*"],
-      "@/assets/*": ["./assets/*"],
       "@/pages/*": ["./pages/*"],
       "@/locales/*": ["./locales/*"]
     }
