@@ -220,6 +220,63 @@ const createBlocksByTitleId = (blocks: ReaderBlock[]): Map<number, ReaderBlock[]
   return blocksByTitleId;
 };
 
+// Books whose chapter detection matched nothing collapse into one giant
+// title. Both reading modes render one title at a time, so a 500k-char book
+// would mount hundreds of thousands of DOM nodes at once (and paged mode
+// would have to column-measure all of them). Cap the segment size here.
+export const SINGLE_TITLE_SEGMENT_CHAR_COUNT = 20_000;
+
+// Regroup a single-title book's blocks into fixed-size segments, split only
+// at block (paragraph) boundaries. Block ids and rawText offsets stay
+// untouched, so annotations, bookmarks and stored progress remain anchored;
+// only the titleId grouping changes. Each segment then behaves like a
+// chapter: scroll mode gets prev/next navigation, paged mode measures it
+// independently, and the catalogue lists every segment.
+const splitOversizedSingleTitle = (tree: TextSyntaxTree): TextSyntaxTree => {
+  if (tree.sequences.length !== 1 || tree.rawText.length <= SINGLE_TITLE_SEGMENT_CHAR_COUNT) return tree;
+  if (tree.blocks.length < 2) return tree;
+
+  const segments: ReaderBlock[][] = [];
+  let currentSegment: ReaderBlock[] = [];
+  let currentCharCount = 0;
+  for (const block of tree.blocks) {
+    currentSegment.push(block);
+    currentCharCount += block.text.length;
+    if (currentCharCount >= SINGLE_TITLE_SEGMENT_CHAR_COUNT) {
+      segments.push(currentSegment);
+      currentSegment = [];
+      currentCharCount = 0;
+    }
+  }
+  if (currentSegment.length > 0) segments.push(currentSegment);
+  if (segments.length <= 1) return tree;
+
+  const baseTitle = tree.titleIdTitle[0] || '';
+  const titleIdTitle = segments.map((_, index) => `${baseTitle} (${index + 1}/${segments.length})`);
+  const titleIdPage: Record<string, number> = {};
+  const titleIdBlockId: Record<string, string> = {};
+  const sequences: Sequence[] = segments.map((segment, index) => {
+    titleIdPage[index] = 0;
+    const blockId = segment[0]?.id;
+    if (blockId) titleIdBlockId[index] = blockId;
+    segment.forEach((block) => {
+      block.titleId = index;
+    });
+    return { blockId, title: titleIdTitle[index], titleId: index };
+  });
+
+  return {
+    ...tree,
+    blocksByTitleId: createBlocksByTitleId(tree.blocks),
+    pageTitleId: [0],
+    segmentedSingleTitle: true,
+    sequences,
+    titleIdBlockId,
+    titleIdPage,
+    titleIdTitle,
+  };
+};
+
 export const readerDocumentToTextSyntaxTree = (document: ReaderBookDocument): TextSyntaxTree => {
   const blocks: ReaderBlock[] = [];
   const sequences: Sequence[] = [];
@@ -415,7 +472,7 @@ export const readerDocumentToTextSyntaxTree = (document: ReaderBookDocument): Te
 
   const firstTitleId = titleIdTitle.length > 0 ? 0 : undefined;
 
-  return {
+  return splitOversizedSingleTitle({
     blockIdPage: {},
     blockIdPageEnd: {},
     blocks,
@@ -427,5 +484,5 @@ export const readerDocumentToTextSyntaxTree = (document: ReaderBookDocument): Te
     titleIdPage,
     titleIdTitle,
     totalPage: 0,
-  };
+  });
 };

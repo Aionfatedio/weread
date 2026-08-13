@@ -35,6 +35,9 @@ export interface TextSyntaxTree {
   blocks: ReaderBlock[];
   blocksByTitleId: Map<number, ReaderBlock[]>;
   rawText: string;
+  // Set when a single-title book was regrouped into fixed-size segments so
+  // the reader can label the segment navigation as pages instead of chapters.
+  segmentedSingleTitle?: boolean;
 }
 
 export const CHAPTER_TITLE_START = '<caption-title>';

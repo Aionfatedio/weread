@@ -150,11 +150,20 @@ export const ReaderScrollContent = ({
   const previousTitleId = titleIds[currentTitleIndex - 1];
   const nextTitleId = titleIds[currentTitleIndex + 1];
   const blocks = useMemo(() => getChapterBlocks(textSyntaxTree, currentTitleId), [currentTitleId, textSyntaxTree]);
+  // Resolve the progress locator's title through its block: after the book's
+  // title grouping changed (re-import, single-title book split into
+  // segments), the stored titleId may point at a different segment than the
+  // block it anchors, and the block wins.
+  const progressTitleId = useMemo(() => {
+    if (!progressLocator?.blockId) return progressLocator?.titleId;
+    const block = textSyntaxTree.blocks.find((item) => item.id === progressLocator.blockId);
+    return block?.titleId ?? progressLocator.titleId;
+  }, [progressLocator?.blockId, progressLocator?.titleId, textSyntaxTree.blocks]);
   const isProgressWaitingForAnotherTitle =
     !navigationRevision &&
     Boolean(progressLocator?.blockId) &&
-    progressLocator?.titleId !== undefined &&
-    progressLocator.titleId !== currentTitleId;
+    progressTitleId !== undefined &&
+    progressTitleId !== currentTitleId;
   const annotationsByBlockId = useMemo(() => {
     const map = new Map<string, ReaderAnnotation[]>();
     annotations.forEach((annotation) => {
@@ -284,7 +293,7 @@ export const ReaderScrollContent = ({
       return;
     }
 
-    if (progressLocator?.blockId && progressLocator.titleId === currentTitleId) {
+    if (progressLocator?.blockId && progressTitleId === currentTitleId) {
       restoreScrollBlock(progressLocator.blockId, progressLocator.blockScrollRatio ?? 0, 'anchor');
       return;
     }
@@ -299,7 +308,7 @@ export const ReaderScrollContent = ({
     navigationRevision,
     progressLocator?.blockId,
     progressLocator?.blockScrollRatio,
-    progressLocator?.titleId,
+    progressTitleId,
     progressLocator?.updatedAt,
     restoreScrollBlock,
     saveScrollTargetLocator,
@@ -423,7 +432,7 @@ export const ReaderScrollContent = ({
           type="button"
           onClick={() => onNavigateTitle(previousTitleId)}
         >
-          {t('reader.previous_chapter')}
+          {t(textSyntaxTree.segmentedSingleTitle ? 'previous_page' : 'reader.previous_chapter')}
         </button>
       )}
       {renderedBlocks}
@@ -433,7 +442,7 @@ export const ReaderScrollContent = ({
           type="button"
           onClick={() => onNavigateTitle(nextTitleId)}
         >
-          {t('reader.next_chapter')}
+          {t(textSyntaxTree.segmentedSingleTitle ? 'next_page' : 'reader.next_chapter')}
         </button>
       )}
     </article>

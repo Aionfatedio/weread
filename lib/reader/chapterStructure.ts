@@ -112,8 +112,15 @@ export const getReaderProgressTitleId = (
   bookId: string | undefined,
   textSyntaxTree: TextSyntaxTree,
 ): number | undefined => {
-  const titleId = getReaderProgress(bookId)?.titleId;
-  return isValidTitleId(textSyntaxTree, titleId) ? titleId : undefined;
+  const progress = getReaderProgress(bookId);
+  if (!progress) return undefined;
+  // The block is a stronger anchor than the stored titleId: when the book's
+  // title grouping changes between sessions (re-import, or a single-title
+  // book newly split into segments), the block's CURRENT titleId is the one
+  // the reader can actually render.
+  const block = progress.blockId ? textSyntaxTree.blocks.find((item) => item.id === progress.blockId) : undefined;
+  if (block && isValidTitleId(textSyntaxTree, block.titleId)) return block.titleId;
+  return isValidTitleId(textSyntaxTree, progress.titleId) ? progress.titleId : undefined;
 };
 
 export const getScrollInitialTitleId = (

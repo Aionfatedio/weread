@@ -98,7 +98,10 @@ export const ReaderNotePanel = (): React.JSX.Element => {
     const grouped = new Map<number, ReaderAnnotation[]>();
     annotations.forEach((annotation) => {
       const block = getAnnotationBlock(textSyntaxTree, annotation);
-      const titleId = annotation.titleId ?? block?.titleId ?? 0;
+      // The block's current titleId wins over the one stored on the
+      // annotation: after a re-import or a single-title split, the stored
+      // titleId can point at a group the block no longer belongs to.
+      const titleId = block?.titleId ?? annotation.titleId ?? 0;
       const list = grouped.get(titleId);
       if (list) list.push(annotation);
       else grouped.set(titleId, [annotation]);
@@ -120,7 +123,7 @@ export const ReaderNotePanel = (): React.JSX.Element => {
   const jumpToAnnotation = useCallback(
     (annotation: ReaderAnnotation) => {
       const block = getAnnotationBlock(textSyntaxTree, annotation);
-      const titleId = annotation.titleId ?? block?.titleId ?? 0;
+      const titleId = block?.titleId ?? annotation.titleId ?? 0;
       if (!block && typeof annotation.page !== 'number') {
         showGlobalFallback({ message: t('notes.location_failed'), tone: 'error' });
         return;
