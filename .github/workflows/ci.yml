@@ -55,5 +55,8 @@ jobs:
       - name: Type check
         run: pnpm run tsc
 
+      - name: Test
+        run: pnpm run test
+
       - name: Build
         run: pnpm build

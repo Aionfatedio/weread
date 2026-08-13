@@ -9,6 +9,7 @@
     "build": "vite build && node scripts/generate-pwa-service-worker.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "tsc": "tsc --noEmit",
+    "test": "vitest run",
     "format": "prettier --write .",
     "lint": "eslint --cache ."
   },
@@ -49,7 +50,8 @@
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.49.0",
-    "vite": "^7.2.7"
+    "vite": "^7.2.7",
+    "vitest": "^4.1.10"
   },
   "directories": {
     "lib": "lib"
