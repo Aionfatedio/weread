@@ -1,0 +1,4 @@
+# Check out every text file with LF on all platforms. The Windows CI runner
+# defaults to core.autocrlf=true, which turned LF into CRLF at checkout and
+# made `prettier --check` (endOfLine: lf) fail on Windows only.
+* text=auto eol=lf
