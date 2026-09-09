@@ -1,4 +1,5 @@
-import { getErrorMessage } from '@/lib/utils';
+import { db } from '@/store';
+import { BOOK_RESOURCES_STORE_NAME, READER_SETTINGS_STORE_NAME } from '@/lib/readerStoreNames';
 
 export interface BookResourceRecord {
   bookId: string;
@@ -12,7 +13,7 @@ const RESOURCE_DB_NAME = 'weread-book-resources';
 
 const RESOURCE_STORE_NAME = 'resources';
 
-const RESOURCE_DB_VERSION = 1;
+const RESOURCE_MIGRATION_KEY = 'weread-book-resources-migrated';
 
 // Cap the in-memory Blob URL cache so long reading sessions cannot leak
 // unbounded amounts of memory. Evicted URLs are NOT revoked immediately —
@@ -24,9 +25,6 @@ const RESOURCE_DB_VERSION = 1;
 const MAX_BLOB_URL_CACHE_SIZE = 256;
 const PENDING_REVOKE_BATCH_SIZE = 64;
 
-let resourceDB: IDBDatabase | null = null;
-let resourceDBPromise: Promise<IDBDatabase> | null = null;
-
 const blobUrlCache = new Map<string, string>();
 const pendingRevoke: string[] = [];
 // Concurrent requests for the same key (e.g. StrictMode double-invoked
@@ -36,78 +34,56 @@ const inflightUrlRequests = new Map<string, Promise<string | undefined>>();
 
 const buildPrimaryKey = (bookId: string, resourceKey: string): string => `${bookId}\u0000${resourceKey}`;
 
-const openResourceDB = (): Promise<IDBDatabase> => {
-  if (resourceDB) return Promise.resolve(resourceDB);
-  if (resourceDBPromise) return resourceDBPromise;
+export const migrateBookResources = async (): Promise<void> => {
+  const marker = await db.readByCursor({
+    storeName: READER_SETTINGS_STORE_NAME,
+    keyRange: IDBKeyRange.only(RESOURCE_MIGRATION_KEY),
+  });
+  if (marker.error) throw new Error(marker.message);
+  if (marker.data.length > 0) return;
 
-  resourceDBPromise = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(RESOURCE_DB_NAME, RESOURCE_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(RESOURCE_STORE_NAME)) {
-        const store = database.createObjectStore(RESOURCE_STORE_NAME, { keyPath: 'primaryKey' });
-        store.createIndex('byBook', 'bookId');
+  const databases = await indexedDB.databases();
+  let records: BookResourceRecord[] = [];
+  if (databases.some((database) => database.name === RESOURCE_DB_NAME)) {
+    const previousDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(RESOURCE_DB_NAME);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    try {
+      records = await new Promise<BookResourceRecord[]>((resolve, reject) => {
+        const request = previousDatabase.transaction(RESOURCE_STORE_NAME).objectStore(RESOURCE_STORE_NAME).getAll();
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+    } finally {
+      previousDatabase.close();
+    }
+  }
+
+  // The marker commits with the copy. A second tab or an interrupted upgrade
+  // must never re-copy old resources over books imported after migration.
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.database!.transaction([BOOK_RESOURCES_STORE_NAME, READER_SETTINGS_STORE_NAME], 'readwrite');
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error || new Error('Resource migration aborted'));
+    const settings = transaction.objectStore(READER_SETTINGS_STORE_NAME);
+    const request = settings.get(RESOURCE_MIGRATION_KEY);
+    request.onsuccess = () => {
+      if (request.result) return;
+      try {
+        const resources = transaction.objectStore(BOOK_RESOURCES_STORE_NAME);
+        records.forEach(({ bookId, resourceKey, mediaType, blob, size }) =>
+          resources.add({ bookId, resourceKey, mediaType, blob, size }),
+        );
+        settings.put({ key: RESOURCE_MIGRATION_KEY, value: 'true', updatedAt: Date.now() });
+      } catch (error) {
+        transaction.abort();
+        reject(error);
       }
     };
-    request.onsuccess = () => {
-      resourceDB = request.result;
-      resourceDBPromise = null;
-      resolve(resourceDB);
-    };
-    request.onerror = () => {
-      resourceDBPromise = null;
-      reject(request.error || new Error('Failed to open resource database'));
-    };
   });
-
-  return resourceDBPromise;
-};
-
-const ensureWritable = async (): Promise<IDBObjectStore | undefined> => {
-  try {
-    const database = await openResourceDB();
-    return database.transaction(RESOURCE_STORE_NAME, 'readwrite').objectStore(RESOURCE_STORE_NAME);
-  } catch (error) {
-    console.error('Resource DB unavailable:', getErrorMessage(error));
-    return undefined;
-  }
-};
-
-interface PersistedRecord extends BookResourceRecord {
-  primaryKey: string;
-}
-
-export const persistBookResources = async (records: BookResourceRecord[]): Promise<void> => {
-  if (records.length === 0) return;
-  const store = await ensureWritable();
-  if (!store) throw new Error('Resource database unavailable');
-  const failures: string[] = [];
-  await new Promise<void>((resolve) => {
-    let pending = records.length;
-    const onSettled = (): void => {
-      pending--;
-      if (pending <= 0) resolve();
-    };
-    records.forEach((record) => {
-      const persisted: PersistedRecord = {
-        ...record,
-        primaryKey: buildPrimaryKey(record.bookId, record.resourceKey),
-      };
-      const request = store.put(persisted);
-      request.onsuccess = onSettled;
-      request.onerror = (event) => {
-        // Without preventDefault a single failed put (quota, clone error)
-        // aborts the whole transaction and rolls back every record that DID
-        // succeed — one bad image would wipe all of the book's resources.
-        event.preventDefault();
-        failures.push(`${record.resourceKey}: ${request.error?.message || 'write failed'}`);
-        onSettled();
-      };
-    });
-  });
-  if (failures.length > 0) {
-    throw new Error(`Failed to persist ${failures.length}/${records.length} book resources (${failures[0]})`);
-  }
+  indexedDB.deleteDatabase(RESOURCE_DB_NAME);
 };
 
 export const loadBookResource = async (
@@ -115,12 +91,11 @@ export const loadBookResource = async (
   resourceKey: string,
 ): Promise<BookResourceRecord | undefined> => {
   try {
-    const database = await openResourceDB();
     return await new Promise<BookResourceRecord | undefined>((resolve) => {
-      const store = database.transaction(RESOURCE_STORE_NAME, 'readonly').objectStore(RESOURCE_STORE_NAME);
-      const request = store.get(buildPrimaryKey(bookId, resourceKey));
+      const store = db.database!.transaction(BOOK_RESOURCES_STORE_NAME).objectStore(BOOK_RESOURCES_STORE_NAME);
+      const request = store.get([bookId, resourceKey]);
       request.onsuccess = () => {
-        const result = request.result as PersistedRecord | undefined;
+        const result = request.result as BookResourceRecord | undefined;
         resolve(result || undefined);
       };
       request.onerror = () => resolve(undefined);
@@ -131,48 +106,13 @@ export const loadBookResource = async (
 };
 
 export const listBookResources = async (bookId: string): Promise<BookResourceRecord[]> => {
-  if (!bookId) return [];
-  try {
-    const database = await openResourceDB();
-    return await new Promise<BookResourceRecord[]>((resolve) => {
-      const store = database.transaction(RESOURCE_STORE_NAME, 'readonly').objectStore(RESOURCE_STORE_NAME);
-      const index = store.index('byBook');
-      const request = index.openCursor(IDBKeyRange.only(bookId));
-      const records: BookResourceRecord[] = [];
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (!cursor) {
-          resolve(records);
-          return;
-        }
-        const { primaryKey: _primaryKey, ...record } = cursor.value as PersistedRecord;
-        records.push(record);
-        cursor.continue();
-      };
-      request.onerror = () => resolve(records);
-    });
-  } catch {
-    return [];
-  }
-};
-
-export const deleteBookResources = async (bookId: string): Promise<void> => {
-  const store = await ensureWritable();
-  if (!store) return;
-  const index = store.index('byBook');
-  await new Promise<void>((resolve) => {
-    const request = index.openKeyCursor(IDBKeyRange.only(bookId));
-    request.onsuccess = () => {
-      const cursor = request.result;
-      if (!cursor) {
-        resolve();
-        return;
-      }
-      store.delete(cursor.primaryKey);
-      cursor.continue();
-    };
-    request.onerror = () => resolve();
+  const records = await db.readByCursor<BookResourceRecord>({
+    storeName: BOOK_RESOURCES_STORE_NAME,
+    indexName: 'bookId',
+    keyRange: IDBKeyRange.only(bookId),
   });
+  if (records.error) throw new Error(records.message);
+  return records.data;
 };
 
 export const getBookResourceUrl = (bookId: string, resourceKey: string): Promise<string | undefined> => {

@@ -1,4 +1,3 @@
-import { toString } from 'ranuts/utils';
 import zhCN from './zh-CN.json';
 import zhHK from './zh-HK.json';
 import en from './en.json';
@@ -60,7 +59,7 @@ export const t = (key: string, params?: Array<string | number>): string => {
     resources[Locales['zh-CN']]?.translation[key] ??
     key;
   if (params) {
-    return text.replace(/\{\{(\w+)\}\}/g, (match, p1) => toString(params[Number(p1)] ?? match));
+    return text.replace(/\{\{(\w+)\}\}/g, (match, p1) => String(params[Number(p1)] ?? match));
   }
   return text;
 };

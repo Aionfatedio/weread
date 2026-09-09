@@ -1,9 +1,10 @@
 import { hydrateReaderSettingCache, persistReaderSetting, readCachedReaderSetting } from '@/lib/readerSettingStore';
 import { canUseDOM } from '@/lib/utils';
+import { hydrateReaderLocalFonts } from '@/lib/readerFonts';
 
 export type ReaderTheme = 'light' | 'dark';
 
-export type ReaderFontSource = 'default' | 'system';
+export type ReaderFontSource = 'default' | 'system' | 'local';
 
 export type ReaderPageTurnEffect = 'fade' | 'jump' | 'scroll';
 
@@ -144,7 +145,7 @@ export const getStoredReaderFont = (): ReaderFontSetting => {
         id: font.id,
         label: font.label,
         family: font.family,
-        source: font.source === 'system' ? 'system' : 'default',
+        source: font.source === 'system' || font.source === 'local' ? font.source : 'default',
       };
     }
   } catch {
@@ -266,6 +267,7 @@ export const bootstrapReaderSettings = (): void => {
 
 export const hydrateReaderSettings = async (): Promise<void> => {
   await hydrateReaderSettingCache();
+  await hydrateReaderLocalFonts();
   bootstrapReaderSettings();
   emitReaderSettingChange();
 };

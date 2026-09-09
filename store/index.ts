@@ -5,14 +5,15 @@ import { hydrateReaderProgress } from '@/lib/readerProgress';
 import { hydrateReaderReadingTime } from '@/lib/readerReadingTime';
 import { hydrateReaderSettings } from '@/lib/readerSettings';
 import { terminateDBWorker } from '@/store/books';
+import { migrateBookResources } from '@/lib/bookResources';
 
-// v4: adds the per-book chapter page-count store (paged-mode pagination
-// persistence). Existing stores/indexes are backfilled by onupgradeneeded.
-const DATABASE_VERSION = 4;
+// v5 stores resources and local fonts with the book data; resource migration
+// must finish before any import can replace a book.
+const DATABASE_VERSION = 5;
 
 export const db = new WebDB({ dbName: 'read', version: DATABASE_VERSION });
 
-const hydrateReaderData = async (): Promise<void> => {
+export const hydrateReaderData = async (): Promise<void> => {
   await Promise.all([
     hydrateReaderSettings(),
     hydrateReaderAnnotations(),
@@ -22,32 +23,34 @@ const hydrateReaderData = async (): Promise<void> => {
   ]);
 };
 
+let initialization: Promise<boolean> | null = null;
+
 export const initDB = (): Promise<boolean> => {
-  return db.openDataBase().then(async (result) => {
-    if (result.status !== 'success') return false;
-    await hydrateReaderData();
-    return true;
+  if (initialization) return initialization;
+  initialization = (async () => {
+    try {
+      const opened = await db.openDataBase();
+      if (opened.error) throw new Error(opened.message);
+      await migrateBookResources();
+      await hydrateReaderData();
+      return true;
+    } catch (error) {
+      console.error('Database initialization failed', error);
+      closeDB();
+      return false;
+    }
+  })().finally(() => {
+    initialization = null;
   });
+  return initialization;
 };
+
 export const closeDB = (): void => {
   terminateDBWorker();
   db.closeDataBase();
 };
 
 export const resumeDB = (): Promise<boolean> => {
-  // Fast path: the connection is still healthy (the common visibilitychange
-  // case). Reopening + rehydrating here would race any in-flight persist —
-  // writes issued during the close/reopen window fail silently, then hydrate
-  // overwrites the in-memory caches with the stale on-disk values. Only
-  // rebuild when the connection was actually lost (pagehide closed it, the
-  // browser fired `close`, or a versionchange forced it shut).
-  if (db.database) return Promise.resolve(true);
-  return db
-    .openDataBase()
-    .then(async (result) => {
-      if (result.status !== 'success') return false;
-      await hydrateReaderData();
-      return true;
-    })
-    .catch(() => false);
+  // Rehydrating a healthy connection could overwrite a pending optimistic save.
+  return initialization ?? (db.database ? Promise.resolve(true) : initDB());
 };

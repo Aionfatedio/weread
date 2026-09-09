@@ -1,19 +1,15 @@
-.home-import-dialog-layer {
-  position: fixed;
-  inset: 0;
-  z-index: 1800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.18);
-  padding: 24px;
+.home-import-dialog::backdrop {
+  background: rgba(33, 40, 50, 0.24);
 }
 
 .home-import-dialog {
-  width: min(420px, 100%);
-  border-radius: 8px;
+  width: min(420px, calc(100% - 48px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  border: 0;
+  border-radius: 14px;
   background: var(--front-bg-color-3);
-  box-shadow: 0 0 12px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 16px 48px rgba(33, 40, 50, 0.14);
   color: var(--text-color-1);
   padding: 24px;
   animation: home-import-dialog-in 140ms ease-out both;
@@ -154,26 +150,18 @@
   --home-search-input-placeholder: var(--text-color-2);
 }
 
-.home-search-field r-input {
-  --ran-input-active-border-color: transparent;
-  --ran-input-active-box-shadow: none;
-  --ran-input-background-color: transparent;
-  --ran-input-border: 0;
-  --ran-input-color: var(--home-search-input-text);
-  --ran-input-content-background-color: var(--home-search-input-bg);
-  --ran-input-content-color: var(--home-search-input-text);
-  --ran-input-content-placeholder-color: var(--home-search-input-placeholder);
-  --ran-input-hover-border-color: transparent;
-}
-
-.home-search-field r-input::part(ran-input) {
-  border-color: transparent;
-  background-color: transparent;
-}
-
-.home-search-field r-input::part(ran-input-content) {
+.home-search-input {
+  border: 0;
+  border-radius: 2rem;
+  padding: 10px 10px 10px 52px;
+  font-size: 16px;
+  font-weight: 400;
   background-color: var(--home-search-input-bg);
   color: var(--home-search-input-text);
+}
+
+.home-search-input::placeholder {
+  color: var(--home-search-input-placeholder);
 }
 
 :root[theme='dark'] .home-search-field {
@@ -305,138 +293,287 @@
   background: #3b3b3b;
 }
 
-/* ---------------------------------------------------------------- */
-/* WeRead-style home layout: navbar / hero / recent-reading section */
-/* ---------------------------------------------------------------- */
-
 .home-page {
   min-height: 100svh;
   background: var(--front-bg-color-1);
 }
 
-.home-navbar {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: var(--front-bg-color-3);
-  border-bottom: 1px solid var(--border-color-1);
-}
-
-.home-navbar-inner {
-  max-width: 80rem;
-  margin: 0 auto;
-  height: 60px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
-}
-
-.home-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--text-color-1);
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-decoration: none;
-}
-
-.home-brand img {
-  width: 28px;
-  height: 28px;
-  display: block;
-}
-
-.home-navbar-links {
-  display: flex;
-  align-items: center;
-  gap: 28px;
-}
-
-.home-navbar-link {
-  color: var(--text-color-2);
-  font-size: 15px;
-  font-weight: 500;
-  text-decoration: none;
-  transition: color 0.15s ease;
-}
-
-.home-navbar-link:hover {
-  color: var(--brand-blue-color-1);
+.home-page-desktop,
+.shelf-page {
+  font-family:
+    'PingFang SC',
+    'Microsoft YaHei',
+    -apple-system,
+    sans-serif;
 }
 
 .home-hero {
-  background:
-    radial-gradient(1200px 320px at 50% -80px, rgba(27, 136, 238, 0.1), rgba(27, 136, 238, 0)), var(--front-bg-color-2);
-  padding: 56px 24px 40px;
+  min-height: 280px;
+  padding: 52px 24px 50px;
+  background: var(--front-bg-color-2);
 }
 
-.home-slogan {
-  margin: 0 0 28px;
-  color: var(--text-color-1);
-  font-size: 28px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-align: center;
+.home-logo {
+  position: relative;
+  width: 160px;
+  height: 36px;
+  margin: 0 auto 28px;
+
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
 }
 
-.home-search-field r-input {
-  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.06));
+.home-page-desktop .home-search-field {
+  --home-search-input-bg: var(--front-bg-color-3);
+  --home-search-input-placeholder: #adb4be;
+  position: relative;
+  width: min(740px, 100%);
+  height: 52px;
+  margin: 0 auto;
+}
+
+.home-page-desktop .home-search-input {
+  width: 100%;
+  height: 100%;
+  padding: 0 52px 0 56px;
+  border-radius: 28px;
+  line-height: 24px;
+}
+
+.home-search-icon {
+  position: absolute;
+  z-index: 1;
+  top: 16px;
+  left: 22px;
+  width: 20px;
+  height: 20px;
+  color: #a5adb7;
+  pointer-events: none;
+}
+
+.home-search-clear {
+  position: absolute;
+  inset: 0 16px 0 auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  border: 0;
+  background: none;
+  color: var(--text-color-3);
+  cursor: pointer;
+}
+
+.home-search-history {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 32px;
+  margin: 28px auto 0;
+  color: var(--text-color-3);
+  font-size: 14px;
+  line-height: 20px;
+
+  > span:first-child {
+    margin-right: 6px;
+    flex-shrink: 0;
+  }
+  button {
+    max-width: 180px;
+    padding: 6px 14px;
+    border: 0;
+    border-radius: 20px;
+    background: color-mix(in srgb, var(--text-color-1) 4%, var(--front-bg-color-2));
+    color: var(--text-color-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  button:hover {
+    color: var(--brand-blue-color-1);
+  }
+  .home-search-history-clear {
+    position: absolute;
+    left: calc(100% + 8px);
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    opacity: 0;
+  }
+  &:hover .home-search-history-clear,
+  &:focus-within .home-search-history-clear {
+    opacity: 1;
+  }
+}
+
+.home-hero.is-searching {
+  padding-top: 28px;
+  padding-bottom: 0;
+  min-height: 100svh;
+}
+
+.home-search-results {
+  max-width: 740px;
+  margin: 20px auto 0;
+}
+
+.home-search-result-panel {
+  overflow: hidden;
+  padding: 16px 0;
+  margin-bottom: 20px;
+  border-radius: 14px;
+  background: var(--front-bg-color-3);
 }
 
 .home-section-inner {
-  max-width: 80rem;
+  width: min(1200px, calc(100% - 80px));
   margin: 0 auto;
-  padding: 40px 24px 0;
+  padding-top: 48px;
 }
 
 .home-section-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+}
+
+.home-page-desktop .home-section-head {
+  padding: 20px 8px;
 }
 
 .home-section-title {
   margin: 0;
   color: var(--text-color-1);
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
+  line-height: 28px;
+}
+
+.home-section-actions,
+.shelf-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.home-page-desktop .home-shelf-link {
+  color: var(--brand-blue-color-1);
+  font-size: 16px;
+  line-height: 24px;
 }
 
 .home-book-grid {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
 }
 
-/* Import tile: dashed drop-zone look, aligned with the desktop book cards. */
-.home-import-card {
-  width: 264px;
-  height: 160px;
-  margin: 20px 24px 0 0;
-  display: flex;
+.library-import-button {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1.5px dashed var(--border-color-1);
-  border-radius: 12px;
-  background: var(--front-bg-color-3);
+  gap: 6px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-color-3);
+  font-size: 14px;
+  line-height: 22px;
   cursor: pointer;
-  transition:
-    border-color 0.2s ease,
-    transform 0.22s ease,
-    box-shadow 0.22s ease;
+  white-space: nowrap;
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+  &:hover {
+    color: var(--brand-blue-color-1);
+  }
 }
 
-.home-import-card:hover {
-  border-color: var(--brand-blue-color-1);
-  transform: translateY(-4px);
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.1);
+.library-empty {
+  min-height: 340px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--text-color-3);
+  text-align: center;
+
+  .book-cover-fallback {
+    width: 56px;
+    height: 80px;
+    margin-bottom: 8px;
+    opacity: 0.8;
+  }
+  h2,
+  h3 {
+    margin: 0;
+    font-size: 18px;
+    line-height: 26px;
+    font-weight: 500;
+    color: var(--text-color-2);
+  }
+  p {
+    margin: 0;
+    font-size: 13px;
+  }
 }
 
-.home-page-mobile {
-  background: var(--front-bg-color-1);
+.library-primary-button {
+  border: 0;
+  border-radius: 24px;
+  background: var(--brand-blue-color-1);
+  color: #fff;
+  font-size: 14px;
+  line-height: 22px;
+  padding: 10px 24px;
+  cursor: pointer;
+
+  &:hover {
+    background: #1772c8;
+  }
+}
+
+.home-page-desktop button:focus-visible,
+.shelf-page button:focus-visible,
+.shelf-page a:focus-visible,
+.home-shelf-link:focus-visible {
+  outline: 2px solid var(--brand-blue-color-1);
+  outline-offset: 4px;
+}
+
+.home-search-input::-webkit-search-cancel-button,
+.shelf-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+// Recolor only the lettering, preserving the blue icon and its white detail.
+:root[theme='dark'] .home-logo::after,
+:root[theme='dark'] .shelf-brand::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--text-color-1);
+  mask: url('/weread-logo.png') center / 100% 100% no-repeat;
+  clip-path: inset(0 0 0 28%);
+  pointer-events: none;
+}
+
+:root[theme='dark'] .home-page-desktop .home-search-field {
+  --home-search-input-bg: var(--front-bg-color-3);
 }
 
 .home-mobile-top {
@@ -448,41 +585,65 @@
   padding: 12px 20px 14px;
 }
 
+.home-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-color-1);
+  font-weight: 700;
+  text-decoration: none;
+}
+
 .home-brand-mobile {
   margin-bottom: 12px;
   font-size: 17px;
-}
 
-.home-brand-mobile img {
-  width: 22px;
-  height: 22px;
+  img {
+    width: 22px;
+    height: 22px;
+    display: block;
+  }
 }
 
 .home-section-head-mobile {
   padding-top: 18px;
 }
-
 .home-section-head-mobile .home-section-title {
   font-size: 18px;
 }
-
 .home-book-grid-mobile {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
   justify-content: flex-start;
 }
-
 .home-import-card-mobile {
   width: 96px;
   height: 134px;
   margin: 20px 18px 0 0;
+  border: 1.5px dashed var(--border-color-1);
   border-radius: 6px;
+  background: var(--front-bg-color-3);
+  color: var(--icon-color-2);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
 }
 
-:root[theme='dark'] .home-import-card:hover {
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
+@media (min-width: 769px) and (max-width: 1100px) {
+  .home-book-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+  }
+  .home-section-inner {
+    width: calc(100% - 64px);
+  }
 }
 
-/* Collapse the slogan while searching so the results panel fits the
-   viewport without triggering a document scrollbar. */
-.home-slogan-hidden {
-  display: none;
+@media (prefers-reduced-motion: reduce) {
+  .home-import-dialog,
+  .book-card-item {
+    animation: none;
+    transition: none;
+  }
 }

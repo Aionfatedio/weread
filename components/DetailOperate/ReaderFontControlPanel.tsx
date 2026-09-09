@@ -22,10 +22,8 @@ import {
   normalizeLocalFonts,
 } from '@/components/DetailOperate/fontPanelUtils';
 import { t } from '@/locales';
-
-const FONT_SIZE_SLIDER_THUMB_SIZE = 26;
-
-const FONT_SIZE_SLIDER_THUMB_RADIUS = FONT_SIZE_SLIDER_THUMB_SIZE / 2;
+import { getReaderLocalFonts, importReaderLocalFont } from '@/lib/readerFonts';
+import { getErrorMessage } from '@/lib/utils';
 
 const FONT_SIZE_APPLY_DELAY = 300;
 
@@ -38,38 +36,8 @@ const isMobileFontAccessViewport = (): boolean => {
   return window.matchMedia('(max-width: 760px)').matches;
 };
 
-const getLocalFontLabel = (fileName: string): string => {
-  return fileName.replace(/\.(?:otf|ttf|woff|woff2)$/i, '').trim() || fileName;
-};
-
 const getReaderFontLabel = (font: ReaderFontSetting): string => {
   return font.id === DEFAULT_READER_FONT.id ? t('font.default') : font.label;
-};
-
-const loadLocalFontFiles = async (files: File[]): Promise<ReaderFontSetting[]> => {
-  const loadedFonts: ReaderFontSetting[] = [];
-  const timestamp = Date.now();
-
-  for (const [index, file] of files.entries()) {
-    if (!LOCAL_FONT_FILE_PATTERN.test(file.name)) continue;
-    const label = getLocalFontLabel(file.name);
-    const family = `WereadLocalFont-${timestamp}-${index}`;
-    try {
-      const fontFace = new FontFace(family, await file.arrayBuffer());
-      await fontFace.load();
-      document.fonts.add(fontFace);
-      loadedFonts.push({
-        id: `system-${family}`,
-        label,
-        family,
-        source: 'system',
-      });
-    } catch {
-      // Ignore unsupported or broken font files in the selected folder.
-    }
-  }
-
-  return loadedFonts;
 };
 
 const clampReaderFontSize = (value: number): number => {
@@ -80,18 +48,16 @@ export const ReaderFontControlPanel = (): React.JSX.Element => {
   const categoryRef = useRef<HTMLDivElement>(null);
   const fontGridRef = useRef<HTMLDivElement>(null);
   const localFontInputRef = useRef<HTMLInputElement>(null);
-  const fontSizeSliderRef = useRef<HTMLDivElement>(null);
   const fontSizeApplyTimerRef = useRef<number | null>(null);
-  const isDraggingFontSizeRef = useRef(false);
-  const fontSizeSliderWidthRef = useRef(0);
+  const pendingFontSizeRef = useRef<number | null>(null);
   const [fontSize, setFontSize] = useState(DEFAULT_READER_FONT_SIZE);
-  const [fontSizeSliderWidth, setFontSizeSliderWidth] = useState(0);
   const [selectedFont, setSelectedFont] = useState<ReaderFontSetting>(DEFAULT_READER_FONT);
-  const [systemFonts, setSystemFonts] = useState<ReaderFontSetting[]>(readerSessionSystemFonts);
+  const [systemFonts, setSystemFonts] = useState<ReaderFontSetting[]>(() =>
+    mergeReaderFonts(readerSessionSystemFonts, getReaderLocalFonts()),
+  );
   const [activeCategory, setActiveCategory] = useState<FontCategory>('all');
   const [isLoadingFonts, setIsLoadingFonts] = useState(false);
   const [fontAccessMessage, setFontAccessMessage] = useState('');
-  const [isDraggingFontSize, setIsDraggingFontSize] = useState(false);
   const [isMobileFontAccess, setIsMobileFontAccess] = useState(isMobileFontAccessViewport);
 
   useEffect(() => {
@@ -105,18 +71,10 @@ export const ReaderFontControlPanel = (): React.JSX.Element => {
     }
     const nextSystemFonts =
       storedFont.source === 'system'
-        ? mergeReaderFonts(readerSessionSystemFonts, [storedFont])
-        : readerSessionSystemFonts;
+        ? mergeReaderFonts(readerSessionSystemFonts, getReaderLocalFonts(), [storedFont])
+        : mergeReaderFonts(readerSessionSystemFonts, getReaderLocalFonts());
     readerSessionSystemFonts = nextSystemFonts;
     setSystemFonts(nextSystemFonts);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (fontSizeApplyTimerRef.current) {
-        window.clearTimeout(fontSizeApplyTimerRef.current);
-      }
-    };
   }, []);
 
   useEffect(() => {
@@ -148,7 +106,7 @@ export const ReaderFontControlPanel = (): React.JSX.Element => {
     const optionMap = new Map<string, ReaderFontSetting>();
     optionMap.set(DEFAULT_READER_FONT.id, DEFAULT_READER_FONT);
     systemFonts.forEach((font) => optionMap.set(font.id, font));
-    if (selectedFont.source === 'system') {
+    if (selectedFont.source !== 'default') {
       optionMap.set(selectedFont.id, selectedFont);
     }
     return Array.from(optionMap.values());
@@ -169,48 +127,27 @@ export const ReaderFontControlPanel = (): React.JSX.Element => {
     return fontOptions.filter((font) => getFontCategory(font) === activeCategory);
   }, [activeCategory, fontOptions]);
 
-  const scheduleApplyFontSize = useCallback((nextFontSize: number) => {
-    if (fontSizeApplyTimerRef.current) {
+  const flushFontSize = useCallback(() => {
+    if (fontSizeApplyTimerRef.current !== null) {
       window.clearTimeout(fontSizeApplyTimerRef.current);
+      fontSizeApplyTimerRef.current = null;
     }
-    fontSizeApplyTimerRef.current = window.setTimeout(() => {
-      saveReaderFontSize(nextFontSize);
-      applyReaderFontSize(nextFontSize);
-      emitReaderSettingChange();
-    }, FONT_SIZE_APPLY_DELAY);
+    const nextFontSize = pendingFontSizeRef.current;
+    pendingFontSizeRef.current = null;
+    if (nextFontSize === null) return;
+    saveReaderFontSize(nextFontSize);
+    applyReaderFontSize(nextFontSize);
+    emitReaderSettingChange();
   }, []);
 
-  const setMeasuredFontSizeSliderWidth = useCallback((width: number) => {
-    const normalizedWidth = Math.max(Math.round(width), 0);
-    if (Math.abs(normalizedWidth - fontSizeSliderWidthRef.current) >= 1) {
-      fontSizeSliderWidthRef.current = normalizedWidth;
-      setFontSizeSliderWidth(normalizedWidth);
-    }
-    return fontSizeSliderWidthRef.current;
-  }, []);
+  const scheduleApplyFontSize = (nextFontSize: number) => {
+    setFontSize(nextFontSize);
+    pendingFontSizeRef.current = nextFontSize;
+    if (fontSizeApplyTimerRef.current !== null) window.clearTimeout(fontSizeApplyTimerRef.current);
+    fontSizeApplyTimerRef.current = window.setTimeout(flushFontSize, FONT_SIZE_APPLY_DELAY);
+  };
 
-  const updateFontSizeSliderWidth = useCallback(() => {
-    const slider = fontSizeSliderRef.current;
-    if (!slider) return fontSizeSliderWidthRef.current;
-    return setMeasuredFontSizeSliderWidth(slider.clientWidth);
-  }, [setMeasuredFontSizeSliderWidth]);
-
-  const updateFontSizeByClientX = useCallback(
-    (clientX: number) => {
-      const slider = fontSizeSliderRef.current;
-      if (!slider) return;
-      const rect = slider.getBoundingClientRect();
-      const width = setMeasuredFontSizeSliderWidth(slider.clientWidth);
-      const activeWidth = Math.max(width - FONT_SIZE_SLIDER_THUMB_SIZE, 1);
-      const scale = width > 0 && rect.width > 0 ? rect.width / width : 1;
-      const localClientX = (clientX - rect.left) / scale;
-      const ratio = Math.min(Math.max((localClientX - FONT_SIZE_SLIDER_THUMB_RADIUS) / activeWidth, 0), 1);
-      const nextFontSize = Math.round(MIN_READER_FONT_SIZE + ratio * (MAX_READER_FONT_SIZE - MIN_READER_FONT_SIZE));
-      setFontSize(nextFontSize);
-      scheduleApplyFontSize(nextFontSize);
-    },
-    [scheduleApplyFontSize, setMeasuredFontSizeSliderWidth],
-  );
+  useEffect(() => () => flushFontSize(), [flushFontSize]);
 
   const onSelectFont = useCallback((font: ReaderFontSetting) => {
     setSelectedFont(font);
@@ -241,7 +178,7 @@ export const ReaderFontControlPanel = (): React.JSX.Element => {
       const fonts = await queryLocalFonts.call(window);
       const localFonts = await normalizeLocalFonts(fonts);
       readerSessionSystemFonts = localFonts;
-      setSystemFonts(localFonts);
+      setSystemFonts(mergeReaderFonts(localFonts, getReaderLocalFonts()));
       setFontAccessMessage(localFonts.length > 0 ? '' : t('font.no_chinese_system_fonts'));
     } catch {
       setFontAccessMessage(t('font.permission_denied'));
@@ -264,11 +201,17 @@ export const ReaderFontControlPanel = (): React.JSX.Element => {
     setIsLoadingFonts(true);
     setFontAccessMessage(t('font.loading_local'));
     try {
-      const localFonts = await loadLocalFontFiles(files);
+      const localFonts: ReaderFontSetting[] = [];
+      for (const file of files.filter((file) => LOCAL_FONT_FILE_PATTERN.test(file.name))) {
+        localFonts.push(await importReaderLocalFont(file));
+      }
       const nextFonts = mergeReaderFonts(readerSessionSystemFonts, localFonts);
       readerSessionSystemFonts = nextFonts;
       setSystemFonts(nextFonts);
       setFontAccessMessage(localFonts.length > 0 ? '' : t('font.no_loadable_fonts'));
+    } catch (error) {
+      setSystemFonts(mergeReaderFonts(readerSessionSystemFonts, getReaderLocalFonts()));
+      setFontAccessMessage(getErrorMessage(error));
     } finally {
       setIsLoadingFonts(false);
     }
@@ -309,103 +252,39 @@ export const ReaderFontControlPanel = (): React.JSX.Element => {
     };
   }, [fontOptions, onSelectFont]);
 
-  useEffect(() => {
-    const sliderElement = fontSizeSliderRef.current;
-    if (!sliderElement) return;
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (!isDraggingFontSizeRef.current) return;
-      updateFontSizeByClientX(e.clientX);
-    };
-    const onPointerUp = () => {
-      isDraggingFontSizeRef.current = false;
-      setIsDraggingFontSize(false);
-      document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', onPointerUp);
-      document.removeEventListener('pointercancel', onPointerUp);
-    };
-    const onPointerDown = (e: PointerEvent) => {
-      e.preventDefault();
-      isDraggingFontSizeRef.current = true;
-      setIsDraggingFontSize(true);
-      updateFontSizeByClientX(e.clientX);
-      document.addEventListener('pointermove', onPointerMove);
-      document.addEventListener('pointerup', onPointerUp);
-      document.addEventListener('pointercancel', onPointerUp);
-    };
-
-    sliderElement.addEventListener('pointerdown', onPointerDown);
-    return () => {
-      sliderElement.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', onPointerUp);
-      document.removeEventListener('pointercancel', onPointerUp);
-    };
-  }, [updateFontSizeByClientX]);
-
-  useEffect(() => {
-    const sliderElement = fontSizeSliderRef.current;
-    if (!sliderElement) return;
-
-    const updateWidth = () => {
-      updateFontSizeSliderWidth();
-    };
-
-    const intervalId = window.setInterval(() => {
-      if (updateFontSizeSliderWidth() > 0) {
-        window.clearInterval(intervalId);
-      }
-    }, 120);
-
-    updateWidth();
-    window.addEventListener('resize', updateWidth);
-
-    let observer: ResizeObserver | undefined;
-    if (typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(updateWidth);
-      observer.observe(sliderElement);
-    }
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('resize', updateWidth);
-      observer?.disconnect();
-    };
-  }, [updateFontSizeSliderWidth]);
-
   const fontSizeProgressRatio =
     (clampReaderFontSize(fontSize) - MIN_READER_FONT_SIZE) / (MAX_READER_FONT_SIZE - MIN_READER_FONT_SIZE);
   const defaultFontSizeProgressRatio =
     (DEFAULT_READER_FONT_SIZE - MIN_READER_FONT_SIZE) / (MAX_READER_FONT_SIZE - MIN_READER_FONT_SIZE);
-  const fontSizeActiveWidth = Math.max(fontSizeSliderWidth - FONT_SIZE_SLIDER_THUMB_SIZE, 0);
-  const fontSizeThumbX = FONT_SIZE_SLIDER_THUMB_RADIUS + fontSizeActiveWidth * fontSizeProgressRatio;
-  const fontSizeProgressWidth = Math.min(fontSizeSliderWidth, fontSizeThumbX + FONT_SIZE_SLIDER_THUMB_RADIUS + 4);
-  const defaultFontSizeDotX = FONT_SIZE_SLIDER_THUMB_RADIUS + fontSizeActiveWidth * defaultFontSizeProgressRatio;
 
   return (
     <div className="reader-font-control-panel-wrapper">
       <div className="reader-font-size-section">
         <div className="reader-font-panel-title">{t('font.size')}</div>
         <div
-          className={`font-panel-content-size-wrapper ${isDraggingFontSize ? 'is-dragging' : ''}`}
+          className="font-panel-content-size-wrapper"
           style={
             {
-              '--reader-font-size-default-dot-x': `${defaultFontSizeDotX}px`,
-              '--reader-font-size-progress-width': `${fontSizeProgressWidth || FONT_SIZE_SLIDER_THUMB_SIZE}px`,
-              '--reader-font-size-thumb-x': `${fontSizeThumbX}px`,
+              '--reader-font-size-default-dot-x': `calc(13px + (100% - 26px) * ${defaultFontSizeProgressRatio})`,
+              '--reader-font-size-progress-width': `calc(26px + (100% - 26px) * ${fontSizeProgressRatio})`,
+              '--reader-font-size-thumb-x': `calc(13px + (100% - 26px) * ${fontSizeProgressRatio})`,
             } as React.CSSProperties
           }
         >
-          <div
-            className="reader_font_control_slider_wrapper font-panel-content-size-slider"
-            ref={fontSizeSliderRef}
-            role="slider"
-            aria-label={t('font.size')}
-            aria-valuemin={MIN_READER_FONT_SIZE}
-            aria-valuemax={MAX_READER_FONT_SIZE}
-            aria-valuenow={fontSize}
-          >
+          <div className="reader_font_control_slider_wrapper font-panel-content-size-slider">
             <div className="reader_font_control_slider_track">
+              <input
+                type="range"
+                className="reader-control-range"
+                aria-label={t('font.size')}
+                aria-valuetext={`${fontSize}px`}
+                min={MIN_READER_FONT_SIZE}
+                max={MAX_READER_FONT_SIZE}
+                step={1}
+                value={fontSize}
+                onChange={(event) => scheduleApplyFontSize(event.currentTarget.valueAsNumber)}
+                onBlur={flushFontSize}
+              />
               <div className="reader_font_control_slider_track_progress"></div>
               <div className="reader_font_control_slider_track_pre"></div>
               <div className="reader_font_control_slider_track_post"></div>

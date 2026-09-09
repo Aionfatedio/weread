@@ -1,4 +1,3 @@
-import { subscribers } from 'ranuts/utils';
 import type { BookInfo } from '@/store/books';
 import { createEmptyTextSyntaxTree } from '@/lib/transformText';
 import type { TextSyntaxTree } from '@/lib/transformText';
@@ -43,7 +42,15 @@ export enum EVENT_NAME {
   SET_TEXT_SYNTAX_TREE = 'set-text-syntax-tree',
 }
 
-export const syncHook = subscribers;
+const readerEvents = new EventTarget();
+
+export const syncHook = {
+  tap: (event: EVENT_NAME, callback: () => void): void => readerEvents.addEventListener(event, callback),
+  off: (event: EVENT_NAME, callback: () => void): void => readerEvents.removeEventListener(event, callback),
+  call: (event: EVENT_NAME): void => {
+    readerEvents.dispatchEvent(new Event(event));
+  },
+};
 
 // Reference-equality signal. The ranuts createSignal deep-compares AND
 // deep-clones every written value (keeping the clone alive for the next

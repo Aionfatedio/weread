@@ -226,7 +226,9 @@ const sanitizeElement = (element: Element, context: SanitizeContext): Node | und
   if (DANGEROUS_TAGS.has(tagName)) return undefined;
 
   if (tagName === 'img') {
-    const img = document.createElement('img');
+    // Keep placeholders in the inert chapter document; live-document images
+    // start loading their src even before they are attached to the page.
+    const img = element.ownerDocument.createElement('img');
     const src = element.getAttribute('src') || '';
     const resourcePath =
       context.resourceKeyByPath.get(resolvePath(context.chapterBase, src)) ||
@@ -240,7 +242,7 @@ const sanitizeElement = (element: Element, context: SanitizeContext): Node | und
   }
 
   const safeTag = BLOCK_TAGS.has(tagName) || INLINE_TAGS.has(tagName) ? tagName : 'span';
-  const safeElement = document.createElement(safeTag);
+  const safeElement = element.ownerDocument.createElement(safeTag);
   Array.from(element.childNodes).forEach((child) => {
     const safeChild = sanitizeNode(child, context);
     if (safeChild) safeElement.appendChild(safeChild);
@@ -249,13 +251,13 @@ const sanitizeElement = (element: Element, context: SanitizeContext): Node | und
 };
 
 const sanitizeNode = (node: Node, context: SanitizeContext): Node | undefined => {
-  if (node.nodeType === Node.TEXT_NODE) return document.createTextNode(node.textContent || '');
+  if (node.nodeType === Node.TEXT_NODE) return node.ownerDocument!.createTextNode(node.textContent || '');
   if (node.nodeType !== Node.ELEMENT_NODE) return undefined;
   return sanitizeElement(node as Element, context);
 };
 
 const sanitizeBodyHtml = (body: HTMLElement, context: SanitizeContext): string => {
-  const container = document.createElement('div');
+  const container = body.ownerDocument.createElement('div');
   Array.from(body.childNodes).forEach((child) => {
     const safeChild = sanitizeNode(child, context);
     if (safeChild) container.appendChild(safeChild);
@@ -440,8 +442,4 @@ export const parseEpubToReaderDocument = async (
     resources,
     coverResourceKey,
   };
-};
-
-export const finalizeEpubResources = (resources: BookResourceRecord[], bookId: string): BookResourceRecord[] => {
-  return resources.map((record) => ({ ...record, bookId }));
 };

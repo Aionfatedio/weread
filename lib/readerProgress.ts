@@ -1,7 +1,7 @@
 import type { ReaderBlock, TextSyntaxTree } from '@/lib/transformText';
 import { EVENT_NAME, syncHook } from '@/lib/subscribe';
 import { db } from '@/store';
-import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
+import { trackPersistResult } from '@/lib/persistFailureNotice';
 import { recordReaderReadingTime } from '@/lib/readerReadingTime';
 import { READER_PROGRESS_STORE_NAME } from '@/lib/readerStoreNames';
 import { clampRatio } from '@/lib/utils';
@@ -355,7 +355,7 @@ export const getBookRecentTimestamp = (book: { createTime?: number; id: string; 
 
 export const hydrateReaderProgress = async (): Promise<void> => {
   const result = await db.readByCursor<ReaderLocator>({ storeName: READER_PROGRESS_STORE_NAME });
-  if (result.error) return;
+  if (result.error) throw new Error(result.message);
   const nextMap: Record<string, ReaderLocator> = {};
   result.data.forEach((locator) => {
     if (locator?.bookId) {
@@ -397,46 +397,6 @@ export const addReaderReadingTime = (
   map[bookId] = next;
   writeProgressMap(map);
   persistReaderProgress(next);
-  syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
-};
-
-export const deleteReaderProgress = async (bookId: string): Promise<void> => {
-  const map = readProgressMap();
-  if (!(bookId in map)) return;
-  delete map[bookId];
-  writeProgressMap(map);
-  syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
-  reportPersistResult(await db.delete({ key: bookId, storeName: READER_PROGRESS_STORE_NAME }));
-};
-
-export const restoreReaderProgressForBook = async ({
-  bookId,
-  progress,
-}: {
-  bookId: string;
-  progress?: ReaderLocator;
-}): Promise<void> => {
-  const map = readProgressMap();
-  if (!progress) {
-    delete map[bookId];
-    writeProgressMap(map);
-    reportPersistResult(await db.delete({ key: bookId, storeName: READER_PROGRESS_STORE_NAME }));
-    syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
-    return;
-  }
-  const next: ReaderLocator = {
-    ...progress,
-    bookId,
-    updatedAt: Number.isFinite(progress.updatedAt) ? progress.updatedAt : Date.now(),
-  };
-  map[bookId] = next;
-  writeProgressMap(map);
-  reportPersistResult(
-    await db.update<ReaderLocator>({
-      data: next,
-      storeName: READER_PROGRESS_STORE_NAME,
-    }),
-  );
   syncHook.call(EVENT_NAME.SET_READER_PROGRESS);
 };
 

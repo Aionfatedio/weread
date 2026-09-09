@@ -1,7 +1,25 @@
 import { db } from '@/store';
-import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
+import { trackPersistResult } from '@/lib/persistFailureNotice';
 import { READER_SETTINGS_STORE_NAME } from '@/lib/readerStoreNames';
 import { safeReadStorage, safeWriteStorage } from '@/lib/utils';
+
+const READER_SETTING_KEYS = new Set([
+  'weread-reader-theme',
+  'weread-reader-font',
+  'weread-reader-font-size',
+  'weread-reader-page-turn-effect',
+  'weread-reader-reading-mode',
+  'weread-reader-first-line-indent',
+  'weread-reader-page-gap-ratio',
+  'weread-reader-scroll-padding-x',
+  'weread-reader-annotation-color',
+  'weread-reader-annotation-color-marker',
+  'weread-reader-annotation-color-underline',
+  'weread-reader-annotation-color-wave',
+]);
+
+export const isReaderSettingKey = (key: unknown): key is string =>
+  typeof key === 'string' && READER_SETTING_KEYS.has(key);
 
 export interface ReaderSettingRecord {
   key: string;
@@ -42,34 +60,15 @@ export const persistReaderSetting = (key: string, value: string): void => {
 
 export const getAllReaderSettings = async (): Promise<ReaderSettingRecord[]> => {
   const result = await db.readByCursor<ReaderSettingRecord>({ storeName: READER_SETTINGS_STORE_NAME });
-  return result.error ? [] : result.data;
-};
-
-export const restoreReaderSettings = async (records: ReaderSettingRecord[]): Promise<void> => {
-  await Promise.all(
-    records
-      .filter((record) => record?.key && typeof record.value === 'string')
-      .map(async (record) => {
-        writeCachedReaderSetting(record.key, record.value);
-        reportPersistResult(
-          await db.update<ReaderSettingRecord>({
-            data: {
-              key: record.key,
-              updatedAt: Number.isFinite(record.updatedAt) ? record.updatedAt : Date.now(),
-              value: record.value,
-            },
-            storeName: READER_SETTINGS_STORE_NAME,
-          }),
-        );
-      }),
-  );
+  if (result.error) throw new Error(result.message);
+  return result.data.filter((record) => isReaderSettingKey(record.key));
 };
 
 export const hydrateReaderSettingCache = async (): Promise<void> => {
   const result = await db.readByCursor<ReaderSettingRecord>({ storeName: READER_SETTINGS_STORE_NAME });
-  if (result.error) return;
+  if (result.error) throw new Error(result.message);
   result.data.forEach((record) => {
-    if (record?.key && typeof record.value === 'string') {
+    if (isReaderSettingKey(record.key)) {
       writeCachedReaderSetting(record.key, record.value);
     }
   });

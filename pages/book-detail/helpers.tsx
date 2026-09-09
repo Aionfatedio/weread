@@ -10,15 +10,15 @@ import { getCurrentBookDetail, getTextSyntaxTree, setCurrentBookDetail, setTextS
 import type { ReaderNavigationTarget } from '@/lib/subscribe';
 import { resumeDB } from '@/store';
 import { getBookById } from '@/store/books';
-import type { BookInfo } from '@/store/books';
 import type { ReaderPageTurnEffect } from '@/lib/readerSettings';
 import type { TextSyntaxTree } from '@/lib/transformText';
 import { isValidTitleId } from '@/lib/reader/chapterStructure';
 import { getCachedTextSyntaxTree } from '@/lib/reader/textSyntaxTreeCache';
 
 export const MOBILE_ICON_STYLE = {
-  '--ran-icon-font-size': '36px',
-  '--ran-icon-color': 'var(--icon-color-1)',
+  width: 36,
+  height: 36,
+  color: 'var(--icon-color-1)',
 };
 
 export const useReaderBookId = (): string | undefined => {
@@ -75,7 +75,11 @@ export const deriveScrollNavigation = (
   textSyntaxTree: TextSyntaxTree,
   effectiveScrollTitleId: number | undefined,
 ): ScrollNavigationState => {
-  const block = target.blockId ? textSyntaxTree.blocks.find((item) => item.id === target.blockId) : undefined;
+  const block = target.blockId
+    ? textSyntaxTree.blocks.find((item) => item.id === target.blockId)
+    : target.titleId === undefined
+      ? undefined
+      : textSyntaxTree.blocksByTitleId.get(target.titleId)?.[0];
   const navigationTitleId = isValidTitleId(textSyntaxTree, target.titleId) ? target.titleId : block?.titleId;
   const hasActiveScrollNavigation = target.revision > 0 && navigationTitleId === effectiveScrollTitleId;
   if (!hasActiveScrollNavigation) return { hasActiveScrollNavigation };
@@ -85,7 +89,7 @@ export const deriveScrollNavigation = (
   const hasTargetPage = typeof target.page === 'number' && Number.isFinite(target.page);
   return {
     hasActiveScrollNavigation,
-    scrollTargetBlockId: target.blockId,
+    scrollTargetBlockId: block?.id,
     scrollTargetBlockPageOffset: resolveNavigationBlockPageOffset(target, blockStartPage, blockEndPage),
     scrollTargetBlockRatio:
       block && typeof target.matchStart === 'number' && Number.isFinite(target.matchStart)
@@ -121,7 +125,7 @@ const LOAD_BOOK_DETAIL_RETRY_BASE_DELAY_MS = 200;
 
 export const loadBookDetailById = (id: string | undefined, navigate: NavigateFunction, attempt: number = 0): void => {
   if (!id) return;
-  getBookById<BookInfo>(id)
+  getBookById(id)
     .then((res) => {
       if (res.error) {
         // Bounded retries: a corrupted IndexedDB used to spin the main thread

@@ -26,6 +26,7 @@ import {
 } from '@/lib/readerSettings';
 import { getReaderProgress } from '@/lib/readerProgress';
 import type { ReaderLocator } from '@/lib/readerProgress';
+import { getReaderBookStatusRecord, setReaderBookStatus } from '@/lib/readerBookStatus';
 import { getFirstTitleId, getScrollInitialTitleId, getTitlePage, isValidTitleId } from '@/lib/reader/chapterStructure';
 import { useReaderReadingTimeTracker } from '@/lib/reader/useReaderReadingTimeTracker';
 
@@ -163,6 +164,12 @@ export const useBookDetailReaderState = (
   const isReaderReady =
     textSyntaxTree.rawText.length > 0 && textSyntaxTree.blocks.length > 0 && bookDetail?.id === bookId;
   useReaderReadingTimeTracker(bookId, isReaderReady, readingMode);
+
+  // 书架状态机：导入后的书默认"未读"，首次成功进入阅读会话即转为"在读"。
+  useEffect(() => {
+    if (!bookId || !isReaderReady) return;
+    if (!getReaderBookStatusRecord(bookId)) setReaderBookStatus(bookId, 'reading');
+  }, [bookId, isReaderReady]);
 
   const isScrollMode = readingMode === 'scroll';
   const initialScrollTitleId = isScrollMode ? getScrollInitialTitleId(bookId, pageNum, textSyntaxTree) : undefined;

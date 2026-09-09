@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useHref, useNavigate } from 'react-router-dom';
 import { BookCard, BookCoverFallback } from '@/components/BookCard';
 import {
@@ -11,13 +11,13 @@ import {
 } from '@/store/books';
 import { trim } from '@/lib/transformText';
 import { resumeDB } from '@/store';
-import { startSpaViewTransition } from '@/lib/navigation';
 import { importBookFile, isSupportedBookFile } from '@/lib/bookImporter';
-import type { BookInfo, SearchResult } from '@/store/books';
+import type { BookSummary, SearchResult } from '@/store/books';
 import type { ImportedBookData } from '@/lib/bookImporter';
 import {
   createImportedBookDataFromBackup,
   getBackupArchiveIdentity,
+  getBackupUserDataForBook,
   isBackupFile,
   isFullBackupArchive,
   parseBackupFile,
@@ -27,12 +27,11 @@ import type { ParsedBackupArchive } from '@/lib/backup/backupSchema';
 import { ROUTE_PATH, createReaderPath } from '@/router';
 import { DEVICE_ENUM, useCheckDevice } from '@/lib/hooks';
 import { useResolvedBookImage } from '@/lib/useResolvedBookImage';
-import { clearReaderBookData } from '@/lib/readerBookData';
+import type { ReaderBookData } from '@/lib/readerBookData';
 import { getBookRecentTimestamp, getReaderProgress } from '@/lib/readerProgress';
-import { debounce, escapeRegExp, getErrorMessage } from '@/lib/utils';
+import { debounce, escapeRegExp, getErrorMessage, safeReadStorage, safeWriteStorage } from '@/lib/utils';
 import { clearReaderSignals } from '@/lib/subscribe';
 import { showGlobalFallback } from '@/lib/globalFallback';
-import { clearChapterPaginationCache, deletePersistedChapterPageCounts } from '@/lib/chapterPagination';
 import { Loading } from '@/components/Loading';
 import {
   OcticonChevronRight as HomeArrowRightIcon,
@@ -41,16 +40,7 @@ import {
   OcticonSearch as HomeSearchIcon,
 } from '@/components/Octicon';
 import { t } from '@/locales';
-import 'ranui/input';
 import './index.scss';
-
-const DESKTOP_INPUT_STYLE = {
-  '--ran-input-border-radius': '2rem',
-  '--ran-input-content-border-radius': '2rem',
-  '--ran-input-content-padding': '10px 10px 10px 52px',
-  '--ran-input-content-font-size': '16px',
-  '--ran-input-content-font-weight': '400',
-};
 
 const MAX_BOOK_LOAD_RETRIES = 3;
 
@@ -60,13 +50,14 @@ type ImportConflictType = 'missing-book' | 'restore-user-data' | 'same-book' | '
 
 type ImportConflictAction = 'cancel' | 'keepBoth' | 'overwrite';
 
-const HOME_RECENT_BOOK_LIMIT = 6;
+const HOME_RECENT_BOOK_LIMIT = 8;
+const SEARCH_HISTORY_KEY = 'weread-search-history';
 
 // Module-scoped cache that survives Home unmount/remount during a single
 // session — keeping the book list on screen avoids a flash of empty shelf when
 // the user navigates back from the reader. The HMR hook below resets it on
 // hot reload so editing this file doesn't leave a stale snapshot around.
-let homeBookListCache: BookInfo[] | null = null;
+let homeBookListCache: BookSummary[] | null = null;
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
@@ -74,7 +65,7 @@ if (import.meta.hot) {
   });
 }
 
-const writeHomeBookListCache = (books: BookInfo[]): void => {
+const writeHomeBookListCache = (books: BookSummary[]): void => {
   homeBookListCache = books;
 };
 
@@ -155,11 +146,11 @@ const importBookFileWithFallback = (file: File): Promise<ImportedBookData> => {
   );
 };
 
-const getBookIdentity = (book: Pick<BookInfo, 'fingerprint' | 'id'>): string => book.fingerprint || book.id;
+const getBookIdentity = (book: Pick<BookSummary, 'fingerprint' | 'id'>): string => book.fingerprint || book.id;
 
 const normalizeBookTitle = (title: string): string => title.trim() || t('common.unnamed_book');
 
-const resolveUniqueBookTitle = (title: string, existingBooks: BookInfo[], currentIdentity: string): string => {
+const resolveUniqueBookTitle = (title: string, existingBooks: BookSummary[], currentIdentity: string): string => {
   const baseTitle = title.trim() || t('common.unnamed_book');
   const existingTitles = new Set(
     existingBooks.filter((book) => getBookIdentity(book) !== currentIdentity).map((book) => book.title),
@@ -207,7 +198,7 @@ const createImportConflictState = ({
   showApplyToRemaining,
   type,
 }: {
-  existingBook: BookInfo;
+  existingBook: BookSummary;
   file: File;
   imported: ImportedBookData;
   showApplyToRemaining: boolean;
@@ -242,7 +233,7 @@ const createBackupUserDataConflictState = ({
   showApplyToRemaining,
 }: {
   archive: ParsedBackupArchive;
-  existingBook: BookInfo;
+  existingBook: BookSummary;
   file: File;
   showApplyToRemaining: boolean;
 }): ImportConflictState => {
@@ -318,13 +309,13 @@ const selectBackupArchivesForRestore = (
   return { ignoredCount, selected };
 };
 
-const upsertBookListItem = (books: BookInfo[], book: BookInfo): BookInfo[] => {
+const upsertBookListItem = (books: BookSummary[], book: BookSummary): BookSummary[] => {
   const index = books.findIndex((item) => item.id === book.id);
   const rest = index === -1 ? books : books.filter((item) => item.id !== book.id);
   return [book, ...rest];
 };
 
-const getRecentHomeBooks = (books: BookInfo[]): BookInfo[] => {
+const getRecentHomeBooks = (books: BookSummary[]): BookSummary[] => {
   return [...books]
     .sort((a, b) => getBookRecentTimestamp(b) - getBookRecentTimestamp(a))
     .slice(0, HOME_RECENT_BOOK_LIMIT);
@@ -340,14 +331,10 @@ const getImportFailureMessage = (file: File, error: unknown): string => {
 };
 
 interface AddBookResolvingConflictsOptions {
-  // Deletes the stale per-book data that must not survive an overwrite.
-  // Backups restore their own user data afterwards, so they only drop the
-  // pagination caches; plain re-imports wipe progress/annotations too.
-  clearExistingData: (bookId: string) => Promise<void> | void;
   failureLabel: string;
   file: File;
   // Matches a shelf book that IS the incoming one (id/fingerprint identity).
-  findSameBook: (book: BookInfo) => boolean;
+  findSameBook: (book: BookSummary) => boolean;
   fingerprint: string;
   // Explicit id for the fresh-add path (backups keep their original book id).
   freshBookId?: string;
@@ -355,10 +342,10 @@ interface AddBookResolvingConflictsOptions {
   // Plain re-imports keep the shelf title the user may have deduplicated;
   // backup restores bring back the archived title.
   keepExistingTitleOnOverwrite: boolean;
-  onPersisted?: (bookId: string) => Promise<void>;
+  readerDataForBook?: (bookId: string) => ReaderBookData;
   requestConflictDecision: (state: ImportConflictState) => Promise<ImportConflictDecision>;
   showApplyToRemaining: boolean;
-  workingBooks: BookInfo[];
+  workingBooks: BookSummary[];
 }
 
 // Shared conflict flow for every import source (book file or full backup):
@@ -366,20 +353,25 @@ interface AddBookResolvingConflictsOptions {
 // both; otherwise add as a new book under a de-duplicated title.
 const addBookResolvingConflicts = async (
   options: AddBookResolvingConflictsOptions,
-): Promise<{ book?: BookInfo; cancelled: boolean }> => {
+): Promise<{ book?: BookSummary; cancelled: boolean }> => {
   const { file, fingerprint, imported, requestConflictDecision, showApplyToRemaining, workingBooks } = options;
 
-  const persist = async (data: { id?: string; overwrite?: boolean; title?: string }): Promise<BookInfo> => {
-    const result = await addBook({ ...imported, fingerprint, ...data });
+  const persist = async (data: { id?: string; overwrite?: boolean; title?: string }): Promise<BookSummary> => {
+    const id = data.id || fingerprint;
+    const result = await addBook({
+      ...imported,
+      fingerprint,
+      ...data,
+      id,
+      readerData: options.readerDataForBook?.(id),
+    });
     if (result.error || !result.data) {
       throw new Error(result.message || `${options.failureLabel}: ${file.name}`);
     }
-    if (options.onPersisted) await options.onPersisted(result.data.id);
     return result.data;
   };
 
-  const overwriteExisting = async (existingBook: BookInfo): Promise<BookInfo> => {
-    await options.clearExistingData(existingBook.id);
+  const overwriteExisting = async (existingBook: BookSummary): Promise<BookSummary> => {
     return persist({
       id: existingBook.id,
       overwrite: true,
@@ -433,14 +425,17 @@ export const ImportConflictDialog = ({
   onConfirm,
 }: ImportConflictDialogProps): React.JSX.Element | null => {
   const navigate = useNavigate();
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const [applyToRemaining, setApplyToRemaining] = useState(false);
   const [keepBoth, setKeepBoth] = useState(false);
 
   useEffect(() => {
-    if (state) {
-      setApplyToRemaining(false);
-      setKeepBoth(false);
-    }
+    if (!state) return;
+    setApplyToRemaining(false);
+    setKeepBoth(false);
+    const dialog = dialogRef.current!;
+    dialog.showModal();
+    dialog.querySelector<HTMLButtonElement>('button:not([hidden])')!.focus();
   }, [state]);
 
   const bookUrl = state ? createReaderPath(state.bookId) : ROUTE_PATH.HOME;
@@ -455,79 +450,93 @@ export const ImportConflictDialog = ({
   const dialogTitle = state.dialogTitle || title;
   const openExistingBook = (event: React.MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
+    dialogRef.current!.close();
     onCancel(false);
     clearReaderSignals();
     navigate(bookUrl);
   };
 
   return (
-    <div className="home-import-dialog-layer" role="presentation">
-      <div className="home-import-dialog" role="dialog" aria-modal="true" aria-labelledby="home-import-dialog-title">
-        <div className="home-import-dialog-title" id="home-import-dialog-title">
-          {dialogTitle}
-        </div>
-        <div className="home-import-dialog-content">
-          <div>{state.description || t('import.already_in_shelf', [state.title])}</div>
-          <div className="home-import-dialog-info">
-            {state.disableBookLink ? (
-              <div className="home-import-dialog-file">{state.fileName}</div>
-            ) : (
-              <a className="home-import-dialog-file" href={bookHref} onClick={openExistingBook}>
-                {state.fileName}
-              </a>
-            )}
-            <div className="home-import-dialog-meta">
-              {state.sourceTypeLabel} | {state.fileSizeLabel} | {state.lastReadLabel}
-            </div>
-          </div>
-          {keepBoth ? (
-            <div className="home-import-dialog-note">{t('import.rename_note', [state.title])}</div>
-          ) : (
-            <div className="home-import-dialog-warning">{state.warningText || t('import.overwrite_warning')}</div>
-          )}
-        </div>
-        {canKeepBoth && (
-          <label className="home-import-dialog-option">
-            <input checked={keepBoth} type="checkbox" onChange={(event) => setKeepBoth(event.currentTarget.checked)} />
-            <span>{t('import.keep_both')}</span>
-          </label>
-        )}
-        {!isConfirmOnly && state.showApplyToRemaining && (
-          <label className="home-import-dialog-option">
-            <input
-              checked={applyToRemaining}
-              type="checkbox"
-              onChange={(event) => setApplyToRemaining(event.currentTarget.checked)}
-            />
-            <span>{t('import.apply_to_remaining')}</span>
-          </label>
-        )}
-        <div className="home-import-dialog-actions">
-          <button
-            className="home-import-dialog-button"
-            disabled={isCancelDisabled}
-            style={isConfirmOnly ? { display: 'none' } : undefined}
-            type="button"
-            onClick={() => onCancel(applyToRemaining)}
-          >
-            {t('common.cancel')}
-          </button>
-          <button
-            className="home-import-dialog-button home-import-dialog-button-primary"
-            type="button"
-            onClick={() => {
-              if (isConfirmOnly) {
-                onCancel(false);
-                return;
-              }
-              onConfirm(keepBoth ? 'keepBoth' : 'overwrite', applyToRemaining);
-            }}
-          >
-            {t('common.confirm')}
-          </button>
-        </div>
+    <dialog
+      ref={dialogRef}
+      className="home-import-dialog"
+      aria-labelledby="home-import-dialog-title"
+      onCancel={(event) => {
+        event.preventDefault();
+        if (!isCancelDisabled) {
+          event.currentTarget.close();
+          onCancel(isConfirmOnly ? false : applyToRemaining);
+        }
+      }}
+    >
+      <div className="home-import-dialog-title" id="home-import-dialog-title">
+        {dialogTitle}
       </div>
-    </div>
+      <div className="home-import-dialog-content">
+        <div>{state.description || t('import.already_in_shelf', [state.title])}</div>
+        <div className="home-import-dialog-info">
+          {state.disableBookLink ? (
+            <div className="home-import-dialog-file">{state.fileName}</div>
+          ) : (
+            <a className="home-import-dialog-file" href={bookHref} onClick={openExistingBook}>
+              {state.fileName}
+            </a>
+          )}
+          <div className="home-import-dialog-meta">
+            {state.sourceTypeLabel} | {state.fileSizeLabel} | {state.lastReadLabel}
+          </div>
+        </div>
+        {keepBoth ? (
+          <div className="home-import-dialog-note">{t('import.rename_note', [state.title])}</div>
+        ) : (
+          <div className="home-import-dialog-warning">{state.warningText || t('import.overwrite_warning')}</div>
+        )}
+      </div>
+      {canKeepBoth && (
+        <label className="home-import-dialog-option">
+          <input checked={keepBoth} type="checkbox" onChange={(event) => setKeepBoth(event.currentTarget.checked)} />
+          <span>{t('import.keep_both')}</span>
+        </label>
+      )}
+      {!isConfirmOnly && state.showApplyToRemaining && (
+        <label className="home-import-dialog-option">
+          <input
+            checked={applyToRemaining}
+            type="checkbox"
+            onChange={(event) => setApplyToRemaining(event.currentTarget.checked)}
+          />
+          <span>{t('import.apply_to_remaining')}</span>
+        </label>
+      )}
+      <div className="home-import-dialog-actions">
+        <button
+          className="home-import-dialog-button"
+          disabled={isCancelDisabled}
+          hidden={isConfirmOnly}
+          type="button"
+          onClick={() => {
+            dialogRef.current!.close();
+            onCancel(applyToRemaining);
+          }}
+        >
+          {t('common.cancel')}
+        </button>
+        <button
+          className="home-import-dialog-button home-import-dialog-button-primary"
+          type="button"
+          onClick={() => {
+            dialogRef.current!.close();
+            if (isConfirmOnly) {
+              onCancel(false);
+              return;
+            }
+            onConfirm(keepBoth ? 'keepBoth' : 'overwrite', applyToRemaining);
+          }}
+        >
+          {t('common.confirm')}
+        </button>
+      </div>
+    </dialog>
   );
 };
 
@@ -535,14 +544,20 @@ export interface BookSearchState {
   clearSearch: () => void;
   searchValue: string;
   searchLoading: boolean;
-  searchTitleResult: BookInfo[];
-  searchAuthorResult: BookInfo[];
+  searchTitleResult: BookSummary[];
+  searchAuthorResult: BookSummary[];
   searchContentResult: SearchResult[];
+  recentSearches: string[];
+  rememberSearch: (keyword: string) => void;
+  clearSearchHistory: () => void;
 }
 
-const useHomeBookList = (): { bookList: BookInfo[]; setBookList: React.Dispatch<React.SetStateAction<BookInfo[]>> } => {
-  const [bookList, setRawBookList] = useState<BookInfo[]>(() => homeBookListCache || []);
-  const setBookList: React.Dispatch<React.SetStateAction<BookInfo[]>> = useCallback((value) => {
+const useHomeBookList = (): {
+  bookList: BookSummary[];
+  setBookList: React.Dispatch<React.SetStateAction<BookSummary[]>>;
+} => {
+  const [bookList, setRawBookList] = useState<BookSummary[]>(() => homeBookListCache || []);
+  const setBookList: React.Dispatch<React.SetStateAction<BookSummary[]>> = useCallback((value) => {
     setRawBookList((previous) => {
       const next = typeof value === 'function' ? value(previous) : value;
       writeHomeBookListCache(next);
@@ -553,7 +568,7 @@ const useHomeBookList = (): { bookList: BookInfo[]; setBookList: React.Dispatch<
   const loadBooks = useCallback(async () => {
     let attempts = 0;
     while (attempts < MAX_BOOK_LOAD_RETRIES) {
-      const res = await getAllBooks<BookInfo>();
+      const res = await getAllBooks();
       if (!res.error) {
         setBookList(res.data);
         return;
@@ -576,8 +591,8 @@ const useHomeBookList = (): { bookList: BookInfo[]; setBookList: React.Dispatch<
 };
 
 export const useHomeBookImport = (
-  bookList: BookInfo[],
-  setBookList: React.Dispatch<React.SetStateAction<BookInfo[]>>,
+  bookList: BookSummary[],
+  setBookList: React.Dispatch<React.SetStateAction<BookSummary[]>>,
 ): {
   conflictState: ImportConflictState | null;
   onAdd: () => void;
@@ -650,7 +665,7 @@ export const useHomeBookImport = (
         showGlobalFallback({ message: t('import.unsupported_skipped'), tone: 'info' });
       }
 
-      const latestBooks = await getAllBooks<BookInfo>();
+      const latestBooks = await getAllBooks();
       let workingBooks = latestBooks.error ? bookListRef.current : latestBooks.data;
       if (latestBooks.error) {
         showGlobalFallback({ message: t('import.shelf_read_failed'), tone: 'info' });
@@ -694,10 +709,6 @@ export const useHomeBookImport = (
               const documentFingerprint = await getBookFingerprint(imported);
               const fingerprint = imported.fingerprint || documentFingerprint;
               const outcome = await addBookResolvingConflicts({
-                clearExistingData: (bookId) => {
-                  clearChapterPaginationCache(bookId);
-                  void deletePersistedChapterPageCounts(bookId);
-                },
                 failureLabel: 'Failed to restore backup',
                 file,
                 findSameBook: (book) => {
@@ -713,7 +724,7 @@ export const useHomeBookImport = (
                 freshBookId: archive.book.id,
                 imported,
                 keepExistingTitleOnOverwrite: false,
-                onPersisted: (bookId) => restoreBackupUserData({ archive, targetBookId: bookId }),
+                readerDataForBook: (bookId) => getBackupUserDataForBook(archive, bookId),
                 requestConflictDecision,
                 showApplyToRemaining,
                 workingBooks,
@@ -752,7 +763,6 @@ export const useHomeBookImport = (
           const documentFingerprint = await getBookFingerprint(imported);
           const fingerprint = imported.fingerprint || documentFingerprint;
           const outcome = await addBookResolvingConflicts({
-            clearExistingData: (bookId) => clearReaderBookData(bookId),
             failureLabel: 'Failed to import book',
             file,
             findSameBook: (book) => {
@@ -792,10 +802,34 @@ export const useHomeBookImport = (
 export const useBookSearch = (inputRef: React.RefObject<HTMLInputElement | null>): BookSearchState => {
   const [searchValue, setSearchValue] = useState<string>('');
   const [searchLoading, setSearchLoading] = useState<boolean>(false);
-  const [searchTitleResult, setSearchTitleResult] = useState<BookInfo[]>([]);
-  const [searchAuthorResult, setSearchAuthorResult] = useState<BookInfo[]>([]);
+  const [searchTitleResult, setSearchTitleResult] = useState<BookSummary[]>([]);
+  const [searchAuthorResult, setSearchAuthorResult] = useState<BookSummary[]>([]);
   const [searchContentResult, setSearchContentResult] = useState<SearchResult[]>([]);
   const requestIdRef = useRef(0);
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    try {
+      const stored: unknown = JSON.parse(safeReadStorage(SEARCH_HISTORY_KEY) || '[]');
+      return Array.isArray(stored)
+        ? stored.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).slice(0, 4)
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  const rememberSearch = useCallback(
+    (keyword: string) => {
+      const value = keyword.trim();
+      if (!value) return;
+      const next = [value, ...recentSearches.filter((item) => item !== value)].slice(0, 4);
+      setRecentSearches(next);
+      safeWriteStorage(SEARCH_HISTORY_KEY, JSON.stringify(next));
+    },
+    [recentSearches],
+  );
+  const clearSearchHistory = useCallback(() => {
+    setRecentSearches([]);
+    safeWriteStorage(SEARCH_HISTORY_KEY, '[]');
+  }, []);
 
   useEffect(() => {
     const target = inputRef.current;
@@ -826,24 +860,22 @@ export const useBookSearch = (inputRef: React.RefObject<HTMLInputElement | null>
       setSearchAuthorResult([]);
       setSearchContentResult([]);
 
-      Promise.allSettled([
-        searchBooksByTitle<BookInfo>(value),
-        searchBooksByAuthor<BookInfo>(value),
-        searchBooksByContent<SearchResult>(value),
-      ]).then((results) => {
-        if (requestIdRef.current !== requestId) return;
-        const [titleRes, authorRes, contentRes] = results;
-        if (titleRes.status === 'fulfilled' && !titleRes.value.error) {
-          setSearchTitleResult(titleRes.value.data);
-        }
-        if (authorRes.status === 'fulfilled' && !authorRes.value.error) {
-          setSearchAuthorResult(authorRes.value.data);
-        }
-        if (contentRes.status === 'fulfilled' && !contentRes.value.error) {
-          setSearchContentResult(contentRes.value.data);
-        }
-        setSearchLoading(false);
-      });
+      Promise.allSettled([searchBooksByTitle(value), searchBooksByAuthor(value), searchBooksByContent(value)]).then(
+        (results) => {
+          if (requestIdRef.current !== requestId) return;
+          const [titleRes, authorRes, contentRes] = results;
+          if (titleRes.status === 'fulfilled' && !titleRes.value.error) {
+            setSearchTitleResult(titleRes.value.data);
+          }
+          if (authorRes.status === 'fulfilled' && !authorRes.value.error) {
+            setSearchAuthorResult(authorRes.value.data);
+          }
+          if (contentRes.status === 'fulfilled' && !contentRes.value.error) {
+            setSearchContentResult(contentRes.value.data);
+          }
+          setSearchLoading(false);
+        },
+      );
     };
 
     const debouncedRunSearch = debounce(runSearch, 500);
@@ -894,7 +926,17 @@ export const useBookSearch = (inputRef: React.RefObject<HTMLInputElement | null>
     setSearchContentResult([]);
   }, [inputRef]);
 
-  return { clearSearch, searchValue, searchLoading, searchTitleResult, searchAuthorResult, searchContentResult };
+  return {
+    clearSearch,
+    searchValue,
+    searchLoading,
+    searchTitleResult,
+    searchAuthorResult,
+    searchContentResult,
+    recentSearches,
+    rememberSearch,
+    clearSearchHistory,
+  };
 };
 
 const renderHighlightedText = (text: string, keyword: string, bookId: string): React.ReactNode => {
@@ -916,12 +958,13 @@ const renderHighlightedText = (text: string, keyword: string, bookId: string): R
 };
 
 interface SearchResultRowProps {
-  book: BookInfo | SearchResult;
+  book: BookSummary | SearchResult;
   highlightedField: 'title' | 'author' | 'matched';
   keyword: string;
+  onOpen: () => void;
 }
 
-const SearchResultRow = ({ book, highlightedField, keyword }: SearchResultRowProps): React.JSX.Element => {
+const SearchResultRow = ({ book, highlightedField, keyword, onOpen }: SearchResultRowProps): React.JSX.Element => {
   const { id, title = '', author = '', image } = book;
   const matchedText = (book as SearchResult).matchedText?.[0] || '';
   const resolvedImage = useResolvedBookImage(id, image);
@@ -932,7 +975,12 @@ const SearchResultRow = ({ book, highlightedField, keyword }: SearchResultRowPro
   }, [id, image]);
 
   return (
-    <div
+    <Link
+      to={createReaderPath(id)}
+      onClick={(event) => {
+        onOpen();
+        if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) clearReaderSignals();
+      }}
       className="py-3.5 px-5 flex flex-row flex-nowrap items-center shrink-0 cursor-pointer hover:bg-light-gray-color-1 min-h-32"
       item-id={id}
     >
@@ -954,7 +1002,7 @@ const SearchResultRow = ({ book, highlightedField, keyword }: SearchResultRowPro
           </div>
         )}
       </div>
-    </div>
+    </Link>
   );
 };
 
@@ -964,7 +1012,6 @@ interface SearchResultsPanelProps {
   height?: string;
   state: BookSearchState;
   panelClassName: string;
-  searchResultRef: React.RefObject<HTMLDivElement | null>;
 }
 
 export const SearchResultsPanel = ({
@@ -973,7 +1020,6 @@ export const SearchResultsPanel = ({
   height = 'calc(100vh - var(--spacing) * 48)',
   state,
   panelClassName,
-  searchResultRef,
 }: SearchResultsPanelProps): React.JSX.Element => {
   const { searchValue, searchLoading, searchTitleResult, searchAuthorResult, searchContentResult } = state;
   const noResult =
@@ -988,7 +1034,6 @@ export const SearchResultsPanel = ({
     <div
       className={`w-full transition-all duration-500 overflow-hidden mt-6 pb-6 ${className}`}
       style={{ height: isExpanded ? height : '0px' }}
-      ref={searchResultRef}
     >
       <div className="overflow-y-auto h-full">
         {searchTitleResult.length > 0 && !searchLoading && (
@@ -1002,6 +1047,7 @@ export const SearchResultsPanel = ({
                     book={book}
                     highlightedField="title"
                     keyword={searchValue}
+                    onOpen={() => state.rememberSearch(searchValue)}
                   />
                 ))}
               </div>
@@ -1019,6 +1065,7 @@ export const SearchResultsPanel = ({
                     book={book}
                     highlightedField="author"
                     keyword={searchValue}
+                    onOpen={() => state.rememberSearch(searchValue)}
                   />
                 ))}
               </div>
@@ -1040,6 +1087,7 @@ export const SearchResultsPanel = ({
                     book={book}
                     highlightedField="matched"
                     keyword={searchValue}
+                    onOpen={() => state.rememberSearch(searchValue)}
                   />
                 ))}
               </div>
@@ -1099,39 +1147,17 @@ interface ImportCardProps {
 }
 
 export const ImportCard = ({ className, iconSize, onAdd }: ImportCardProps): React.JSX.Element => {
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    e.preventDefault();
-    onAdd();
-  };
-
   return (
-    <div className={className} role="button" tabIndex={0} onClick={onAdd} onKeyDown={onKeyDown}>
-      <HomePlusIcon style={{ width: iconSize, height: iconSize, color: 'var(--icon-color-2)' }} />
-    </div>
+    <button
+      className={className}
+      type="button"
+      aria-label={t('import.books')}
+      title={t('import.books')}
+      onClick={onAdd}
+    >
+      <HomePlusIcon style={{ width: iconSize, height: iconSize }} />
+    </button>
   );
-};
-
-export const useBookSearchNativeNavigation = (searchResultRef: React.RefObject<HTMLDivElement | null>): void => {
-  const navigate = useNavigate();
-  useEffect(() => {
-    const element = searchResultRef.current;
-    if (!element) return;
-    const handler = (e: MouseEvent) => {
-      // closest(): the click usually lands on a child (cover svg, title
-      // span, row padding), not on the element carrying item-id.
-      const id = (e.target instanceof Element ? e.target : null)?.closest('[item-id]')?.getAttribute('item-id');
-      if (!id) return;
-      startSpaViewTransition(() => {
-        clearReaderSignals();
-        navigate(createReaderPath(id));
-      });
-    };
-    element.addEventListener('click', handler);
-    return () => {
-      element.removeEventListener('click', handler);
-    };
-  }, [navigate, searchResultRef]);
 };
 
 export const Home = (): React.JSX.Element => {
@@ -1143,67 +1169,113 @@ export const Home = (): React.JSX.Element => {
 
 export const DesktopHome = (): React.JSX.Element => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const searchResultRef = useRef<HTMLDivElement>(null);
   const { bookList, setBookList } = useHomeBookList();
   const searchState = useBookSearch(inputRef);
   const { conflictState, onAdd, onCancelConflict, onConfirmConflict } = useHomeBookImport(bookList, setBookList);
   const recentBookList = useMemo(() => getRecentHomeBooks(bookList), [bookList]);
-  useBookSearchNativeNavigation(searchResultRef);
+  const isSearching = Boolean(searchState.searchValue);
 
   return (
-    <div className="home-page">
-      <header className="home-navbar">
-        <div className="home-navbar-inner">
-          <Link className="home-brand" to={ROUTE_PATH.HOME}>
-            <img alt="" src={`${import.meta.env.BASE_URL}read.svg`} />
-            <span>weread</span>
-          </Link>
-          <nav className="home-navbar-links">
-            <Link className="home-navbar-link" to={ROUTE_PATH.SHELF}>
-              {t('my_bookcase')}
-            </Link>
-          </nav>
-        </div>
-      </header>
-      <div className="home-hero">
-        <h1 className={`home-slogan ${searchState.searchValue ? 'home-slogan-hidden' : ''}`}>{t('home.slogan')}</h1>
-        <div className="home-search-field relative w-1/2 min-w-2xs h-14 block mx-auto">
-          <HomeSearchIcon
-            className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none z-10"
-            style={{ width: 24, height: 24, color: 'var(--icon-color-1)' }}
-          />
-          <r-input
-            className="w-full h-full block mx-auto"
-            style={DESKTOP_INPUT_STYLE}
+    <div className="home-page home-page-desktop">
+      <header className={`home-hero ${isSearching ? 'is-searching' : ''}`}>
+        <h1 className="home-logo">
+          <img src={`${import.meta.env.BASE_URL}weread-logo.png`} alt="微信读书" width="160" height="36" />
+        </h1>
+        <div className="home-search-field">
+          <HomeSearchIcon className="home-search-icon" />
+          <input
+            type="search"
+            aria-label={t('search')}
+            className="home-search-input"
             placeholder={t('search')}
             ref={inputRef}
-          ></r-input>
+            onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
+              if (event.key === 'Enter') searchState.rememberSearch(event.currentTarget.value);
+              if (event.key === 'Escape') searchState.clearSearch();
+            }}
+          />
+          {isSearching && (
+            <button
+              className="home-search-clear"
+              type="button"
+              aria-label={t('search.clear')}
+              onClick={searchState.clearSearch}
+            >
+              <HomeSearchClearIcon />
+            </button>
+          )}
         </div>
-        <SearchResultsPanel
-          height="calc(100vh - 250px)"
-          state={searchState}
-          panelClassName="w-1/2 min-w-2xs block mx-auto bg-front-bg-color-3 rounded-xl py-5 mb-6"
-          searchResultRef={searchResultRef}
-        />
-      </div>
-      {!searchState.searchValue && (
-        <div className="home-bookcase-section w-full">
+        {!isSearching && searchState.recentSearches.length > 0 && (
+          <div className="home-search-history">
+            <span>{t('search.recent')}</span>
+            {searchState.recentSearches.map((keyword) => (
+              <button
+                key={keyword}
+                type="button"
+                onClick={() => {
+                  const input = inputRef.current!;
+                  input.value = keyword;
+                  input.dispatchEvent(new Event('input', { bubbles: true }));
+                  input.focus();
+                }}
+              >
+                {keyword}
+              </button>
+            ))}
+            <button
+              className="home-search-history-clear"
+              type="button"
+              aria-label={t('search.clear_history')}
+              title={t('search.clear_history')}
+              onClick={searchState.clearSearchHistory}
+            >
+              <HomeSearchClearIcon />
+            </button>
+          </div>
+        )}
+        {isSearching && (
+          <SearchResultsPanel
+            className="home-search-results"
+            height="calc(100vh - 184px)"
+            state={searchState}
+            panelClassName="home-search-result-panel"
+          />
+        )}
+      </header>
+      {!isSearching && (
+        <main className="home-bookcase-section">
           <div className="home-section-inner">
             <div className="home-section-head">
-              <h2 className="home-section-title">{t('home.recent')}</h2>
-              <Link className="home-shelf-link" to={ROUTE_PATH.SHELF}>
-                <span>{t('shelf.view')}</span>
-                <HomeArrowRightIcon style={{ width: 16, height: 16 }} />
-              </Link>
+              <h2 className="home-section-title">{t(bookList.length ? 'home.continue' : 'home.start')}</h2>
+              <div className="home-section-actions">
+                <button className="library-import-button" type="button" onClick={onAdd}>
+                  <HomePlusIcon />
+                  <span>{t('import.books')}</span>
+                </button>
+                <Link className="home-shelf-link" to={ROUTE_PATH.SHELF}>
+                  {t('my_bookcase')}
+                </Link>
+              </div>
             </div>
-            <div className="home-book-grid">
-              <ImportCard className="home-import-card" iconSize={40} onAdd={onAdd} />
-              {recentBookList.map((book) => (
-                <BookCard book={book} key={book.id} />
-              ))}
-            </div>
+            {recentBookList.length > 0 ? (
+              <div className="home-book-grid">
+                {recentBookList.map((book) => (
+                  <BookCard book={book} key={book.id} />
+                ))}
+              </div>
+            ) : (
+              <div className="library-empty">
+                <BookCoverFallback title="微信读书" />
+                <h3>{t('shelf.empty')}</h3>
+                <p>{t('import.supported_formats')}</p>
+                <button className="library-primary-button" type="button" onClick={onAdd}>
+                  {t('import.books')}
+                </button>
+              </div>
+            )}
           </div>
-        </div>
+        </main>
       )}
       <ImportConflictDialog state={conflictState} onCancel={onCancelConflict} onConfirm={onConfirmConflict} />
     </div>
@@ -1212,12 +1284,10 @@ export const DesktopHome = (): React.JSX.Element => {
 
 export const MobileHome = (): React.JSX.Element => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const searchResultRef = useRef<HTMLDivElement>(null);
   const { bookList, setBookList } = useHomeBookList();
   const searchState = useBookSearch(inputRef);
   const { conflictState, onAdd, onCancelConflict, onConfirmConflict } = useHomeBookImport(bookList, setBookList);
   const recentBookList = useMemo(() => getRecentHomeBooks(bookList), [bookList]);
-  useBookSearchNativeNavigation(searchResultRef);
 
   return (
     <div className="home-page home-page-mobile w-full min-h-svh">
@@ -1244,11 +1314,7 @@ export const MobileHome = (): React.JSX.Element => {
       </div>
       {searchState.searchValue && (
         <div className="px-5">
-          <SearchResultsPanel
-            state={searchState}
-            panelClassName="block mx-auto bg-front-bg-color-3 rounded-xl mb-6"
-            searchResultRef={searchResultRef}
-          />
+          <SearchResultsPanel state={searchState} panelClassName="block mx-auto bg-front-bg-color-3 rounded-xl mb-6" />
         </div>
       )}
       {!searchState.searchValue && (

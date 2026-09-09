@@ -1,5 +1,5 @@
 import { db } from '@/store';
-import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
+import { trackPersistResult } from '@/lib/persistFailureNotice';
 import { CHAPTER_PAGE_COUNTS_STORE_NAME } from '@/lib/readerStoreNames';
 import type { ReaderBlock } from '@/lib/transformText';
 
@@ -26,7 +26,8 @@ const CACHE_LIMIT = 256;
 const cache = new Map<string, ChapterPagination>();
 
 const fingerprintToString = (f: ChapterLayoutFingerprint): string => {
-  return `${f.fontFamily}|${f.fontSize}|${f.firstLineIndent}|${f.pageWidth}|${f.pageHeight}|${f.pageGap}|${f.paragraphGap}|${f.lineHeight}`;
+  // The EPUB block layout changed; old measured counts and locator offsets expire.
+  return `v2|${f.fontFamily}|${f.fontSize}|${f.firstLineIndent}|${f.pageWidth}|${f.pageHeight}|${f.pageGap}|${f.paragraphGap}|${f.lineHeight}`;
 };
 
 // Stable identity for "the layout these page numbers were computed under".
@@ -245,7 +246,7 @@ export const persistChapterPageCount = (
   );
 };
 
-export const deletePersistedChapterPageCounts = async (bookId: string): Promise<void> => {
+export const clearPersistedChapterPageCountCache = (bookId: string): void => {
   if (!bookId) return;
   const prefix = `${bookId}|`;
   for (const key of Array.from(pageCountsCache.keys())) {
@@ -259,13 +260,6 @@ export const deletePersistedChapterPageCounts = async (bookId: string): Promise<
     }
   }
   hydratedPageCountsBooks.delete(bookId);
-  reportPersistResult(
-    await db.deleteByCursor({
-      storeName: CHAPTER_PAGE_COUNTS_STORE_NAME,
-      indexName: 'bookId',
-      keyRange: IDBKeyRange.only(bookId),
-    }),
-  );
 };
 
 // ---------------------------------------------------------------------------

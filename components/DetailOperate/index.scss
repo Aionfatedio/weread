@@ -386,14 +386,6 @@
   touch-action: pan-y;
 }
 
-.reader-control-button r-icon {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .reader-menu-panel,
 .reader-setting-control-panel-wrapper,
 .reader-font-control-panel-wrapper,
@@ -898,12 +890,12 @@
 .reader_font_control_slider_wrapper .reader_font_control_slider_default_dot {
   position: absolute;
   top: 14px;
-  left: -2px;
+  left: var(--reader-font-size-default-dot-x);
   width: 4px;
   height: 4px;
   border-radius: 50%;
   background: var(--text-color-2);
-  transform: translate3d(var(--reader-font-size-default-dot-x, 13px), 0, 0);
+  transform: translateX(-50%);
   z-index: 2;
   pointer-events: none;
 }
@@ -914,8 +906,8 @@
   border-radius: 100%;
   position: absolute;
   top: 0;
-  left: -13px;
-  transform: translate3d(var(--reader-font-size-thumb-x, 13px), 3px, 0);
+  left: var(--reader-font-size-thumb-x);
+  transform: translate(-50%, 3px);
   width: 26px;
   height: 26px;
   z-index: 3;
@@ -943,9 +935,40 @@
 }
 
 .font-panel-content-size-wrapper:hover .reader_font_control_slider_dot span,
-.font-panel-content-size-wrapper.is-dragging .reader_font_control_slider_dot span {
+.font-panel-content-size-wrapper:focus-within .reader_font_control_slider_dot span {
   opacity: 1;
   visibility: visible;
+}
+
+// Native range owns keyboard, pointer and touch input; the existing track
+// and thumb retain the reader's appearance without JS width measurements.
+.reader-control-range {
+  appearance: none;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 32px;
+  margin: 0;
+  opacity: 0;
+  z-index: 4;
+  cursor: pointer;
+}
+
+.reader-control-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 26px;
+  height: 26px;
+}
+
+.reader-control-range::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border: 0;
+}
+
+.reader_font_control_slider_wrapper:has(input:focus-visible) {
+  outline: 2px solid var(--brand-blue-color-1);
+  outline-offset: 3px;
 }
 
 .reader-font-category-tabs {

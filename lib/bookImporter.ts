@@ -1,4 +1,4 @@
-import { finalizeEpubResources, parseEpubToReaderDocument } from '@/lib/epubParser';
+import { parseEpubToReaderDocument } from '@/lib/epubParser';
 import { createReader } from '@/lib/transformText';
 import { createReaderDocumentFromText } from '@/lib/readerDocument';
 import { getFileExtension, sha256Hex } from '@/lib/utils';
@@ -58,7 +58,7 @@ export const importBookFile = async (file: File, options: ImportBookOptions = {}
 
   if (extension === 'txt') {
     throwIfAborted(options.signal);
-    const document = createReaderDocumentFromText({
+    const document = await createReaderDocumentFromText({
       content,
       title: file.name,
     });
@@ -76,5 +76,3 @@ export const importBookFile = async (file: File, options: ImportBookOptions = {}
 
   throw new Error(`Unsupported book file type: ${file.name}`);
 };
-
-export { finalizeEpubResources };

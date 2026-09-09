@@ -22,6 +22,7 @@ import {
   getCurrentBookDetail,
   getPageNum,
   getReaderControlPanelActive,
+  getReaderNavigationTarget,
   getReaderSearchHighlight,
   getTextSyntaxTree,
   setPageNum,
@@ -98,8 +99,7 @@ import { renderReaderBlock } from '@/components/Reader/ReaderBlock';
 import { ReaderCopyToast, ReaderNoteModal, ReaderSelectionMenu } from '@/components/Reader/ReaderSelectionMenu';
 import { ReaderPageBookmarkControl } from '@/components/Reader/ReaderPageBookmark';
 import { ReaderScrollContent } from '@/components/Reader/ReaderScrollContent';
-import 'ranui/icon';
-import 'ranui/input';
+import { OcticonChevronLeft } from '@/components/Octicon';
 import './index.scss';
 
 interface ReaderPagedContentProps {
@@ -161,6 +161,7 @@ const ReaderPagedContent = ({
   const [fingerprint, setFingerprint] = useState<ChapterLayoutFingerprint>(() =>
     buildChapterLayoutFingerprint({ pageWidth: 0, pageGap: 0, pageStep: 0, pageHeight: 0 }),
   );
+  const fingerprintRef = useRef(fingerprint);
   const [chapterPaginations, setChapterPaginations] = useState<Map<number, ChapterPagination>>(() => new Map());
   const [contentMeasureRevision, setContentMeasureRevision] = useState(0);
   const [copyToastVisible, setCopyToastVisible] = useState(false);
@@ -380,6 +381,9 @@ const ReaderPagedContent = ({
     // book is loading; saving would overwrite this book's progress with the
     // other book's position (block ids collide across books).
     if (getCurrentBookDetail()?.id !== bookId) return undefined;
+    // A flush during re-pagination must retain the anchor, not derive a new
+    // position from incomplete page maps.
+    if (pendingLocatorRef.current) return pendingLocatorRef.current;
     const currentTree = getTextSyntaxTree();
     if (!currentTree.rawText || currentTree.blocks.length === 0) return undefined;
     return createReaderLocator({
@@ -441,8 +445,23 @@ const ReaderPagedContent = ({
     });
 
     const nextFingerprint = buildChapterLayoutFingerprint(nextLayout);
-    setFingerprint((prev) => (chapterFingerprintEqual(prev, nextFingerprint) ? prev : nextFingerprint));
-  }, [visiblePages]);
+    if (!chapterFingerprintEqual(fingerprintRef.current, nextFingerprint)) {
+      // Publish the layout and its measurements together; mixing old page counts
+      // with a new layout can consume the pending locator before re-pagination.
+      if (paginationMeasureFrameRef.current !== null) {
+        window.cancelAnimationFrame(paginationMeasureFrameRef.current);
+        paginationMeasureFrameRef.current = null;
+      }
+      const nextPaginations = new Map<number, ChapterPagination>();
+      for (const titleId of titleIdSequence) {
+        const cached = getCachedChapterPagination(bookId, titleId, nextFingerprint);
+        if (cached) nextPaginations.set(titleId, cached);
+      }
+      fingerprintRef.current = nextFingerprint;
+      setFingerprint(nextFingerprint);
+      setChapterPaginations(nextPaginations);
+    }
+  }, [bookId, titleIdSequence, visiblePages]);
 
   const scheduleMeasureLayout = useCallback(
     ({ includeSettledPass = false, rememberLocator = false } = {}) => {
@@ -497,10 +516,6 @@ const ReaderPagedContent = ({
     });
   }, [bookId, currentTitleId, scheduleMeasureLayout]);
 
-  const fingerprintRef = useRef(fingerprint);
-
-  // 章节级测量：currentTitleId / fingerprint / layout.pageStep / 当前章 blocks 变化时
-  // fingerprint 变化时同步在本 effect 内清空旧分页 state，避免 useEffect 异步清空与 layoutEffect 测量之间的时序竞争
   useLayoutEffect(() => {
     if (paginationMeasureFrameRef.current !== null) {
       window.cancelAnimationFrame(paginationMeasureFrameRef.current);
@@ -511,31 +526,14 @@ const ReaderPagedContent = ({
     const flow = flowRef.current;
     if (!flow) return;
 
-    const fingerprintChanged = !chapterFingerprintEqual(fingerprintRef.current, fingerprint);
-    if (fingerprintChanged) {
-      fingerprintRef.current = fingerprint;
-    }
-
-    const restoreCachedPaginationBase = fingerprintChanged
-      ? () => {
-          const base = new Map<number, ChapterPagination>();
-          for (const tid of titleIdSequence) {
-            const tidCached = getCachedChapterPagination(bookId, tid, fingerprint);
-            if (tidCached) base.set(tid, tidCached);
-          }
-          return base;
-        }
-      : undefined;
-
     if (!areChapterImagesReadyForPagination(flow, currentChapterImageCount)) {
       clearChapterPaginationCache(bookId, currentTitleId);
       setChapterPaginations((prev) => {
         const current = prev.get(currentTitleId);
         if (!current || current.chapterPageCount > 1 || currentChapterImageCount <= 1) {
-          if (!fingerprintChanged) return prev;
-          return prev.size === 0 ? prev : restoreCachedPaginationBase ? restoreCachedPaginationBase() : new Map();
+          return prev;
         }
-        const next = restoreCachedPaginationBase ? restoreCachedPaginationBase() : new Map(prev);
+        const next = new Map(prev);
         next.delete(currentTitleId);
         return next;
       });
@@ -545,19 +543,12 @@ const ReaderPagedContent = ({
     const cached = getCachedChapterPagination(bookId, currentTitleId, fingerprint);
     if (cached) {
       setChapterPaginations((prev) => {
-        if (!fingerprintChanged && prev.get(currentTitleId) === cached) return prev;
-        const base = restoreCachedPaginationBase ? restoreCachedPaginationBase() : new Map(prev);
+        if (prev.get(currentTitleId) === cached) return prev;
+        const base = new Map(prev);
         base.set(currentTitleId, cached);
         return base;
       });
       return;
-    }
-
-    if (fingerprintChanged) {
-      setChapterPaginations((prev) => {
-        if (prev.size === 0) return prev;
-        return restoreCachedPaginationBase ? restoreCachedPaginationBase() : new Map();
-      });
     }
 
     paginationMeasureFrameRef.current = window.requestAnimationFrame(() => {
@@ -569,7 +560,7 @@ const ReaderPagedContent = ({
       setCachedChapterPagination(bookId, currentTitleId, fingerprint, result);
       persistChapterPageCount(bookId, currentTitleId, fingerprint, result.chapterPageCount);
       setChapterPaginations((prev) => {
-        const base = restoreCachedPaginationBase ? restoreCachedPaginationBase() : new Map(prev);
+        const base = new Map(prev);
         base.set(currentTitleId, result);
         return base;
       });
@@ -642,6 +633,36 @@ const ReaderPagedContent = ({
     textSyntaxTree.rawText,
   ]);
 
+  // 搜索/目录跳转：navigationTarget 转 pendingLocator，由统一定位逻辑兜底跨章
+  const navigationRevisionRef = useRef(0);
+  useEffect(() => {
+    if (!navigationTarget || navigationTarget.revision <= 0) return;
+    if (navigationRevisionRef.current === navigationTarget.revision) return;
+    navigationRevisionRef.current = navigationTarget.revision;
+    if (!navigationTarget.blockId && navigationTarget.titleId === undefined) return;
+    const block = navigationTarget.blockId
+      ? blocks.find((b) => b.id === navigationTarget.blockId)
+      : navigationTarget.titleId === undefined
+        ? undefined
+        : blocksByTitleId.get(navigationTarget.titleId)?.[0];
+    const ratio =
+      block && typeof navigationTarget.matchStart === 'number' && Number.isFinite(navigationTarget.matchStart)
+        ? Math.min(Math.max(navigationTarget.matchStart / Math.max(block.text.length, 1), 0), 1)
+        : undefined;
+    const blockStartPage = block ? textSyntaxTree.blockIdPage[block.id] : undefined;
+    const blockEndPage = block ? (textSyntaxTree.blockIdPageEnd[block.id] ?? blockStartPage) : undefined;
+    const blockPageOffset = resolveNavigationBlockPageOffset(navigationTarget, blockStartPage, blockEndPage);
+    pendingLocatorRef.current = {
+      bookId: bookId ?? '',
+      page: navigationTarget.page ?? 0,
+      blockId: block?.id,
+      blockPageOffset,
+      titleId: navigationTarget.titleId,
+      blockScrollRatio: ratio,
+      updatedAt: Date.now(),
+    };
+  }, [navigationTarget, bookId, blocks, blocksByTitleId, textSyntaxTree.blockIdPage, textSyntaxTree.blockIdPageEnd]);
+
   // pendingLocator 处理：定位到 locator 指向的精确页
   useEffect(() => {
     const locator = pendingLocatorRef.current;
@@ -676,6 +697,14 @@ const ReaderPagedContent = ({
       visiblePages,
     );
     pendingLocatorRef.current = null;
+    // Navigation is a one-shot request, not a position to replay on remount.
+    if (
+      navigationTarget &&
+      navigationTarget.revision > 0 &&
+      getReaderNavigationTarget().revision === navigationTarget.revision
+    ) {
+      setReaderNavigationTarget({ revision: 0 });
+    }
     if (getPageNum() !== targetPage) {
       setPageNum(targetPage);
     }
@@ -698,6 +727,7 @@ const ReaderPagedContent = ({
     chapterStartPages,
     currentLayoutKey,
     currentTitleId,
+    navigationTarget,
     titleIdSequence,
     visiblePages,
   ]);
@@ -707,32 +737,6 @@ const ReaderPagedContent = ({
     if (!bookId || !textSyntaxTree.rawText) return;
     pendingLocatorRef.current = getReaderProgress(bookId) || null;
   }, [bookId, textSyntaxTree.rawText]);
-
-  // 搜索/目录跳转：navigationTarget 转 pendingLocator，由统一定位逻辑兜底跨章
-  const navigationRevisionRef = useRef(0);
-  useEffect(() => {
-    if (!navigationTarget || navigationTarget.revision <= 0) return;
-    if (navigationRevisionRef.current === navigationTarget.revision) return;
-    navigationRevisionRef.current = navigationTarget.revision;
-    if (!navigationTarget.blockId && navigationTarget.titleId === undefined) return;
-    const block = navigationTarget.blockId ? blocks.find((b) => b.id === navigationTarget.blockId) : undefined;
-    const ratio =
-      block && typeof navigationTarget.matchStart === 'number' && Number.isFinite(navigationTarget.matchStart)
-        ? Math.min(Math.max(navigationTarget.matchStart / Math.max(block.text.length, 1), 0), 1)
-        : undefined;
-    const blockStartPage = block ? textSyntaxTree.blockIdPage[block.id] : undefined;
-    const blockEndPage = block ? (textSyntaxTree.blockIdPageEnd[block.id] ?? blockStartPage) : undefined;
-    const blockPageOffset = resolveNavigationBlockPageOffset(navigationTarget, blockStartPage, blockEndPage);
-    pendingLocatorRef.current = {
-      bookId: bookId ?? '',
-      page: navigationTarget.page ?? 0,
-      blockId: navigationTarget.blockId,
-      blockPageOffset,
-      titleId: navigationTarget.titleId,
-      blockScrollRatio: ratio,
-      updatedAt: Date.now(),
-    };
-  }, [navigationTarget, bookId, blocks, textSyntaxTree.blockIdPage, textSyntaxTree.blockIdPageEnd]);
 
   // totalPage 收缩时把越界的 pageNum 拉回范围内
   useEffect(() => {
@@ -1299,8 +1303,8 @@ export const MobileBookDetail = (): React.JSX.Element => {
     return (
       <div className="reader-mobile-scroll-page reader-user-select-disabled" onContextMenu={preventReaderContextMenu}>
         <div className={`reader-mobile-scroll-header ${isTouch ? 'is-visible' : ''}`}>
-          <button className="reader-mobile-back-button" type="button" onClick={back}>
-            <r-icon name="more" className="rotate-90" style={MOBILE_ICON_STYLE}></r-icon>
+          <button aria-label={t('reader.my_shelf')} className="reader-mobile-back-button" type="button" onClick={back}>
+            <OcticonChevronLeft style={MOBILE_ICON_STYLE} />
           </button>
           <div className="reader-mobile-scroll-title">{bookDetail?.title}</div>
         </div>
@@ -1351,7 +1355,14 @@ export const MobileBookDetail = (): React.JSX.Element => {
               height: isTouch ? 'calc(var(--spacing) * 14)' : '0px',
             }}
           >
-            <r-icon name="more" className="cursor-pointer rotate-90" style={MOBILE_ICON_STYLE} onClick={back}></r-icon>
+            <button
+              aria-label={t('reader.my_shelf')}
+              className="reader-mobile-back-button"
+              type="button"
+              onClick={back}
+            >
+              <OcticonChevronLeft style={MOBILE_ICON_STYLE} />
+            </button>
           </div>
           <ReaderPagedContent
             bookId={id}

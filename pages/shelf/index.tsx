@@ -6,7 +6,7 @@ import { Loading } from '@/components/Loading';
 import { OcticonXCircle as ShelfSearchClearIcon, OcticonSearch as ShelfSearchIcon } from '@/components/Octicon';
 import { ROUTE_PATH, createReaderPath } from '@/router';
 import { getAllBooks } from '@/store/books';
-import type { BookInfo } from '@/store/books';
+import type { BookSummary } from '@/store/books';
 import { resumeDB } from '@/store';
 import { startSpaViewTransition } from '@/lib/navigation';
 import {
@@ -16,14 +16,7 @@ import {
 } from '@/lib/readerBookStatus';
 import { getBookRecentTimestamp } from '@/lib/readerProgress';
 import { useResolvedBookImage } from '@/lib/useResolvedBookImage';
-import {
-  ImportCard,
-  ImportConflictDialog,
-  SearchResultsPanel,
-  useBookSearch,
-  useBookSearchNativeNavigation,
-  useHomeBookImport,
-} from '@/pages/home';
+import { ImportCard, ImportConflictDialog, SearchResultsPanel, useBookSearch, useHomeBookImport } from '@/pages/home';
 import { clearReaderSignals } from '@/lib/subscribe';
 import { t } from '@/locales';
 import './index.scss';
@@ -52,18 +45,18 @@ const ShelfFilterIcon = (): React.JSX.Element => (
   </svg>
 );
 
-const sortShelfBooks = (books: BookInfo[]): BookInfo[] => {
+const sortShelfBooks = (books: BookSummary[]): BookSummary[] => {
   return [...books].sort((a, b) => getBookRecentTimestamp(b) - getBookRecentTimestamp(a));
 };
 
 const useShelfBooks = (): {
-  books: BookInfo[];
+  books: BookSummary[];
   loading: boolean;
-  setBooks: Dispatch<SetStateAction<BookInfo[]>>;
+  setBooks: Dispatch<SetStateAction<BookSummary[]>>;
 } => {
-  const [books, setBooks] = useState<BookInfo[]>([]);
+  const [books, setBooks] = useState<BookSummary[]>([]);
   const [loading, setLoading] = useState(true);
-  const setSortedBooks = useCallback<Dispatch<SetStateAction<BookInfo[]>>>((value) => {
+  const setSortedBooks = useCallback<Dispatch<SetStateAction<BookSummary[]>>>((value) => {
     setBooks((previous) => {
       const next = typeof value === 'function' ? value(previous) : value;
       return sortShelfBooks(next);
@@ -75,7 +68,7 @@ const useShelfBooks = (): {
     const loadBooks = async (): Promise<void> => {
       let attempts = 0;
       while (attempts < MAX_SHELF_BOOK_LOAD_RETRIES) {
-        const result = await getAllBooks<BookInfo>();
+        const result = await getAllBooks();
         if (!result.error) {
           if (!cancelled) {
             setSortedBooks(result.data);
@@ -125,25 +118,20 @@ const ShelfStatusFilter = ({
   }, []);
 
   return (
-    <div ref={containerRef} className={`shelf-status-filter ${isExpanded ? 'is-expanded' : ''}`}>
-      <div className="shelf-status-filter-options">
-        {SHELF_STATUS_FILTER_OPTIONS.map((option) => (
-          <button
-            key={option.id}
-            className={`shelf-status-filter-option ${value === option.id ? 'is-active' : ''}`}
-            type="button"
-            onClick={() => {
-              onChange(option.id);
-              setIsExpanded(false);
-            }}
-          >
-            {t(option.labelKey)}
-          </button>
-        ))}
-      </div>
-
+    <div
+      ref={containerRef}
+      className={`shelf-status-filter ${isExpanded ? 'is-expanded' : ''}`}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          setIsExpanded(false);
+          containerRef.current?.querySelector<HTMLButtonElement>('.shelf-status-filter-trigger')?.focus();
+        }
+      }}
+    >
       <button
         aria-expanded={isExpanded}
+        aria-controls="shelf-status-options"
+        aria-label={t('shelf.filter')}
         className="shelf-status-filter-trigger"
         type="button"
         onClick={() => setIsExpanded((value) => !value)}
@@ -151,11 +139,34 @@ const ShelfStatusFilter = ({
         <span>{t(currentLabel)}</span>
         <ShelfFilterIcon />
       </button>
+      <div
+        id="shelf-status-options"
+        className="shelf-status-filter-options"
+        role="group"
+        aria-label={t('shelf.filter')}
+        inert={!isExpanded}
+      >
+        {SHELF_STATUS_FILTER_OPTIONS.map((option) => (
+          <button
+            key={option.id}
+            aria-pressed={value === option.id}
+            className={`shelf-status-filter-option ${value === option.id ? 'is-active' : ''}`}
+            type="button"
+            onClick={() => {
+              onChange(option.id);
+              setIsExpanded(false);
+              containerRef.current?.querySelector<HTMLButtonElement>('.shelf-status-filter-trigger')?.focus();
+            }}
+          >
+            {t(option.labelKey)}
+          </button>
+        ))}
+      </div>
     </div>
   );
 };
 
-const ShelfBookItem = ({ book }: { book: BookInfo }): React.JSX.Element => {
+const ShelfBookItem = ({ book }: { book: BookSummary }): React.JSX.Element => {
   const navigate = useNavigate();
   const { id, image, title = '' } = book;
   const resolvedImage = useResolvedBookImage(id, image);
@@ -170,6 +181,7 @@ const ShelfBookItem = ({ book }: { book: BookInfo }): React.JSX.Element => {
 
   const openBook = useCallback(
     (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       startSpaViewTransition(() => {
         clearReaderSignals();
@@ -180,7 +192,13 @@ const ShelfBookItem = ({ book }: { book: BookInfo }): React.JSX.Element => {
   );
 
   return (
-    <a className="shelf-book-item" href={href} style={{ viewTransitionName: `book-info-${id}` }} onClick={openBook}>
+    <a
+      className="shelf-book-item"
+      aria-label={`${title} · ${getBookProgressLabel(id)}`}
+      href={href}
+      style={{ viewTransitionName: `book-info-${id}` }}
+      onClick={openBook}
+    >
       <div className="shelf-book-cover">
         {shouldShowImage ? (
           <img src={resolvedImage} alt={title} onError={() => setImageFailed(true)} />
@@ -191,14 +209,12 @@ const ShelfBookItem = ({ book }: { book: BookInfo }): React.JSX.Element => {
       <div className="shelf-book-title" title={title}>
         {title}
       </div>
-      <div className="shelf-book-progress">{getBookProgressLabel(id)}</div>
     </a>
   );
 };
 
 export const Shelf = (): React.JSX.Element => {
   const inputRef = useRef<HTMLInputElement>(null);
-  const searchResultRef = useRef<HTMLDivElement>(null);
   const { books, loading, setBooks } = useShelfBooks();
   const searchState = useBookSearch(inputRef);
   const { conflictState, onAdd, onCancelConflict, onConfirmConflict } = useHomeBookImport(books, setBooks);
@@ -206,7 +222,6 @@ export const Shelf = (): React.JSX.Element => {
   const [statusFilter, setStatusFilter] = useState<ShelfStatusFilterValue>('all');
   const statusRevision = useReaderBookStatusRevision();
   const isSearchExpanded = Boolean(searchDraft);
-  useBookSearchNativeNavigation(searchResultRef);
   const { clearSearch } = searchState;
   const clearShelfSearch = useCallback(() => {
     clearSearch();
@@ -222,10 +237,20 @@ export const Shelf = (): React.JSX.Element => {
       <header className={`shelf-navbar ${isSearchExpanded ? 'is-searching' : ''}`}>
         <div className="shelf-navbar-border">
           <div className="shelf-navbar-inner">
+            <Link className="shelf-brand" to={ROUTE_PATH.HOME} aria-label={t('home')}>
+              <img src={`${import.meta.env.BASE_URL}weread-logo.png`} alt="微信读书" width="118" height="27" />
+            </Link>
             <div className="shelf-search">
               <ShelfSearchIcon className="shelf-search-icon" />
               <input
                 ref={inputRef}
+                type="search"
+                aria-label={t('search')}
+                onKeyDown={(event) => {
+                  if (event.nativeEvent.isComposing) return;
+                  if (event.key === 'Enter') searchState.rememberSearch(event.currentTarget.value);
+                  if (event.key === 'Escape') clearShelfSearch();
+                }}
                 placeholder={t('search')}
                 onChange={(event) => setSearchDraft(event.currentTarget.value.trim())}
               />
@@ -251,7 +276,6 @@ export const Shelf = (): React.JSX.Element => {
           expanded={isSearchExpanded}
           height="calc(100vh - 96px)"
           panelClassName="shelf-search-result-panel bg-front-bg-color-3 rounded-xl py-5 mb-6"
-          searchResultRef={searchResultRef}
           state={searchState}
         />
       </header>
@@ -259,11 +283,24 @@ export const Shelf = (): React.JSX.Element => {
       <main className="shelf-main">
         <div className="shelf-page-header">
           <h1>{t('my_bookcase')}</h1>
-          <ShelfStatusFilter value={statusFilter} onChange={setStatusFilter} />
+          <div className="shelf-page-actions">
+            <ShelfStatusFilter value={statusFilter} onChange={setStatusFilter} />
+          </div>
         </div>
         {loading ? (
           <div className="shelf-loading">
             <Loading />
+          </div>
+        ) : visibleBooks.length === 0 ? (
+          <div className="library-empty">
+            <BookCoverFallback title="微信读书" />
+            <h2>{t(books.length ? 'shelf.no_matching_books' : 'shelf.empty')}</h2>
+            <p>{t(books.length ? 'shelf.change_filter' : 'import.supported_formats')}</p>
+            {!books.length && (
+              <button className="library-primary-button" type="button" onClick={onAdd}>
+                {t('import.books')}
+              </button>
+            )}
           </div>
         ) : (
           <div className="shelf-list">

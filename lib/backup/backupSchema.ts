@@ -4,6 +4,7 @@ import type { ReaderAnnotation } from '@/lib/readerAnnotations';
 import type { ReaderBookStatus, ReaderBookStatusRecord } from '@/lib/readerBookStatus';
 import type { ReaderLocator } from '@/lib/readerProgress';
 import type { ReaderReadingTimeDailyAggregate, ReaderReadingTimeSegment } from '@/lib/readerReadingTime';
+import type { ReaderLocalFontRecord } from '@/lib/readerFonts';
 
 export const BACKUP_SCHEMA_VERSION = 1;
 
@@ -62,11 +63,12 @@ export interface BackupResourceManifestItem {
 
 export interface BackupUserDataPayload {
   annotations: ReaderAnnotation[];
-  bookStatus?: ReaderBookStatusRecord;
-  progress?: ReaderLocator;
+  bookStatus?: ReaderBookStatusRecord | null;
+  progress?: ReaderLocator | null;
   readingTimeDaily: ReaderReadingTimeDailyAggregate[];
   readingTimeSegments: ReaderReadingTimeSegment[];
   settings: Array<{ key: string; updatedAt: number; value: string }>;
+  fonts?: ReaderLocalFontRecord[];
 }
 
 export interface ParsedBackupArchive {

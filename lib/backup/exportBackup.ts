@@ -2,6 +2,7 @@ import { listBookResources } from '@/lib/bookResources';
 import { createBackupZip } from '@/lib/backup/backupZip';
 import { BACKUP_FILE_EXTENSION, BACKUP_SCHEMA_VERSION } from '@/lib/backup/backupSchema';
 import { getAllReaderSettings } from '@/lib/readerSettingStore';
+import { readReaderLocalFontRecords } from '@/lib/readerFonts';
 import { getBookById } from '@/store/books';
 import { getReaderAnnotations } from '@/lib/readerAnnotations';
 import { getReaderBookStatusRecord } from '@/lib/readerBookStatus';
@@ -69,7 +70,7 @@ export const createSingleBookBackup = async ({
   bookId: string;
   includeBook: boolean;
 }): Promise<{ blob: Blob; fileName: string }> => {
-  const result = await getBookById<BookInfo>(bookId);
+  const result = await getBookById(bookId);
   if (result.error || !result.data) {
     throw new Error(t('backup.book_not_found'));
   }
@@ -80,6 +81,13 @@ export const createSingleBookBackup = async ({
   const bookStatus = getReaderBookStatusRecord(bookId);
   const progress = getReaderProgress(bookId);
   const settings = await getAllReaderSettings();
+  const fontSetting = settings.find((record) => record.key === 'weread-reader-font');
+  const selectedFont = fontSetting ? JSON.parse(fontSetting.value) : undefined;
+  const fonts =
+    selectedFont?.source === 'local'
+      ? (await readReaderLocalFontRecords()).filter((record) => record.font.id === selectedFont.id)
+      : [];
+  if (selectedFont?.source === 'local' && fonts.length === 0) throw new Error(t('backup.invalid_data', ['font']));
   const readingTime = await getReaderReadingTimeRecordsForBook(bookId);
   const readingTimeSummary = getReaderReadingTimeSummary(bookId);
   const resources = includeBook ? await listBookResources(bookId) : [];
@@ -135,6 +143,11 @@ export const createSingleBookBackup = async ({
     { data: jsonEntry(userData.bookStatus || null), path: 'user-data/book-status.json' },
     { data: jsonEntry(userData.progress || null), path: 'user-data/progress.json' },
     { data: jsonEntry(userData.settings), path: 'user-data/settings.json' },
+    {
+      data: jsonEntry(fonts.map(({ font, blob }) => ({ font, path: `user-data/fonts/${font.id}`, size: blob.size }))),
+      path: 'user-data/fonts.json',
+    },
+    ...fonts.map(({ font, blob }) => ({ path: `user-data/fonts/${font.id}`, data: blob })),
     { data: jsonEntry(userData.readingTimeDaily), path: 'user-data/reading-time-daily.json' },
     { data: jsonEntry(userData.readingTimeSegments), path: 'user-data/reading-time-segments.json' },
     { data: jsonEntry(resourceManifest), path: `books/${book.id}/resources/manifest.json` },

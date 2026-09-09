@@ -83,7 +83,7 @@ const createTextChapter = (title: string, text: string, order: number): ReaderDo
   title: title.trim() || `Chapter ${order + 1}`,
 });
 
-export const createReaderDocumentFromText = ({
+export const createReaderDocumentFromText = async ({
   author = '',
   content,
   title,
@@ -91,8 +91,8 @@ export const createReaderDocumentFromText = ({
   author?: string;
   content: ArrayBuffer | Uint8Array<ArrayBuffer>;
   title: string;
-}): ReaderBookDocument => {
-  const text = normalizeText(arrayBufferToString(content));
+}): Promise<ReaderBookDocument> => {
+  const text = normalizeText(await arrayBufferToString(content));
   const chapters = extractBookChapters(text).chapters;
   const documentTitle = stripBookExtension(title) || title;
   const documentChapters: ReaderDocumentChapter[] = [];
@@ -180,10 +180,15 @@ const getDirectBlockElements = (root: Element): Element[] => {
       if (child.nodeType !== Node.ELEMENT_NODE) continue;
       const childElement = child as Element;
       const isBlock = BLOCK_TAGS.has(childElement.tagName.toLowerCase());
-      if (isBlock || childElement.querySelector(BLOCK_TAGS_SELECTOR)) {
+      const hasNestedBlocks = Boolean(childElement.querySelector(BLOCK_TAGS_SELECTOR));
+      if (isBlock || hasNestedBlocks) {
         flushInlineRun();
-        if (isBlock) blocks.push(childElement);
-        else visit(childElement);
+        if (hasNestedBlocks) {
+          // A paragraph may interleave prose and images. Flatten its children
+          // in source order instead of losing descendants to textContent.
+          visit(childElement);
+          flushInlineRun();
+        } else blocks.push(childElement);
         continue;
       }
       // Pure inline subtree — accumulate it into the current paragraph run.
@@ -367,13 +372,13 @@ export const readerDocumentToTextSyntaxTree = (document: ReaderBookDocument): Te
     return block;
   };
 
-  const addImageBlock = (element: Element, titleId: number, createBlockId: () => string): void => {
+  const addImageBlock = (element: Element, titleId: number, createBlockId: () => string): ReaderBlock | undefined => {
     const src = element.getAttribute('src') || '';
     if (!src) return;
     if (rawOffset > 0 && rawParts[rawParts.length - 1] !== '\n\n') appendRaw('\n\n');
     const alt = element.getAttribute('alt') || '';
     const rawBounds = appendRaw(alt || '[image]');
-    blocks.push({
+    const block: ReaderBlock = {
       alt,
       end: rawBounds.end,
       id: createBlockId(),
@@ -382,7 +387,9 @@ export const readerDocumentToTextSyntaxTree = (document: ReaderBookDocument): Te
       text: alt,
       titleId,
       type: 'image',
-    });
+    };
+    blocks.push(block);
+    return block;
   };
 
   const addHtmlBlocks = (
@@ -403,7 +410,8 @@ export const readerDocumentToTextSyntaxTree = (document: ReaderBookDocument): Te
     getDirectBlockElements(body).forEach((element) => {
       const tagName = element.tagName.toLowerCase();
       if (tagName === 'img') {
-        addImageBlock(element, titleId, createBlockId);
+        const imageBlock = addImageBlock(element, titleId, createBlockId);
+        firstBlock ||= imageBlock;
         return;
       }
 
@@ -436,7 +444,12 @@ export const readerDocumentToTextSyntaxTree = (document: ReaderBookDocument): Te
     const chapterId = chapter.id || `chapter-${chapterIndex}`;
     let blockCounter = 0;
     const createBlockId = (): string => {
-      const id = `${chapterId}-block-${blockCounter}`;
+      // EPUB v2 includes nested images and splits mixed paragraphs. Reusing old
+      // ordinal ids would attach existing annotations to unrelated content.
+      const id =
+        document.sourceType === 'epub'
+          ? `${chapterId}-epub-v2-block-${blockCounter}`
+          : `${chapterId}-block-${blockCounter}`;
       blockCounter++;
       return id;
     };

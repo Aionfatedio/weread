@@ -27,15 +27,6 @@ export const safeWriteStorage = (key: string, value: string): void => {
   }
 };
 
-export const safeRemoveStorage = (key: string): void => {
-  if (!canUseStorage()) return;
-  try {
-    window.localStorage.removeItem(key);
-  } catch {
-    // Ignore restricted storage contexts.
-  }
-};
-
 export const getFileExtension = (file: File): string => {
   const index = file.name.lastIndexOf('.');
   return index === -1 ? '' : file.name.slice(index + 1).toLowerCase();

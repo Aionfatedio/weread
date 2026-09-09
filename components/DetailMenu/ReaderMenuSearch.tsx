@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { debounce } from 'ranuts/utils';
+import { debounce } from '@/lib/utils';
 import { EVENT_NAME, getTextSyntaxTree, syncHook } from '@/lib/subscribe';
 import { trim } from '@/lib/transformText';
 import { OcticonChevronRight, OcticonSearch, OcticonXCircle } from '@/components/Octicon';
@@ -64,8 +64,9 @@ const SearchResultChapter = ({
         text.map((str, i) => {
           const { blockId, blockLength, matchStart, sentence } = str;
           return (
-            <div
-              className="text-text-color-2 font-normal text-base py-4 px-6 cursor-pointer hover:bg-front-bg-color-2"
+            <button
+              type="button"
+              className="w-full text-left text-text-color-2 font-normal text-base py-4 px-6 cursor-pointer hover:bg-front-bg-color-2"
               data-search-result-block-id={blockId}
               data-search-result-block-length={`${blockLength}`}
               data-search-result-match-start={`${matchStart}`}
@@ -73,7 +74,7 @@ const SearchResultChapter = ({
               key={`${blockId}-${i}`}
             >
               {renderSearchResultSentence(sentence, searchKeyword)}
-            </div>
+            </button>
           );
         })}
     </div>
@@ -146,7 +147,10 @@ export const ReaderMenuSearch = ({ idleContent }: ReaderMenuSearchProps): React.
     [onSearch, searchCacheKey],
   );
 
+  useEffect(() => () => onSearch.cancel(), [onSearch]);
+
   const clearSearch = () => {
+    onSearch.cancel();
     latestSearchValueRef.current = '';
     searchResultScrollTopRef.current = 0;
     setSearchKeyword('');

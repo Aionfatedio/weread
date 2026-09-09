@@ -1,6 +1,6 @@
 import { useHref, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
-import type { BookInfo } from '@/store/books';
+import type { BookSummary } from '@/store/books';
 import { clearReaderSignals } from '@/lib/subscribe';
 import { startSpaViewTransition } from '@/lib/navigation';
 import { createReaderPath } from '@/router';
@@ -12,7 +12,7 @@ import { t } from '@/locales';
 import './index.scss';
 
 interface BookCardProps {
-  book: BookInfo;
+  book: BookSummary;
 }
 
 // "已读 12%" / "未读" / "读完" — mirrors the WeRead recent-reading card label.
@@ -29,6 +29,7 @@ export const getBookProgressLabel = (bookId: string | undefined): string => {
 const useBookCardNavigate = (id: string | number | undefined) => {
   const navigate = useNavigate();
   return (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
     if (id === undefined) return;
     const target = createReaderPath(id);
@@ -46,18 +47,16 @@ export const BookCoverFallback = ({
   className?: string;
   title?: string;
 }): React.JSX.Element => {
+  const tone = Array.from(title).reduce((hash, character) => (hash * 31 + character.codePointAt(0)!) >>> 0, 0) % 6;
   return (
-    <div className={`book-cover-fallback ${className}`} aria-hidden="true" title={title}>
-      <svg xmlns="http://www.w3.org/2000/svg" width="60%" height="60%" fill-opacity="0.3" viewBox="0 0 24 24">
-        <path
-          fill="none"
-          stroke="currentColor"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          stroke-width="2"
-          d="M5 19V4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v13H7a2 2 0 0 0-2 2m0 0a2 2 0 0 0 2 2h12M9 3v14m7 0v4"
-        />
-      </svg>
+    <div className={`book-cover-fallback ${className}`} data-cover-tone={tone} aria-hidden="true" title={title}>
+      <div className="book-cover-pattern">
+        <svg viewBox="0 0 100 112" focusable="false">
+          <text x="50" y="94" textAnchor="middle">
+            阅
+          </text>
+        </svg>
+      </div>
     </div>
   );
 };
@@ -79,6 +78,7 @@ export const BookCard = ({ book }: BookCardProps): React.JSX.Element => {
     <a
       onClick={onClick}
       href={href}
+      aria-label={`${title} · ${progressLabel}`}
       style={{ viewTransitionName: `book-info-${id}` }}
       className={`book-card-item ${isMobile ? 'book-card-mobile' : 'book-card-desktop'}`}
     >
@@ -98,7 +98,9 @@ export const BookCard = ({ book }: BookCardProps): React.JSX.Element => {
             {author}
           </div>
         )}
-        <div className="book-card-progress">{progressLabel}</div>
+        <div className="book-card-progress" aria-hidden="true">
+          {progressLabel}
+        </div>
       </div>
     </a>
   );

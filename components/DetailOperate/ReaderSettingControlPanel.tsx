@@ -41,10 +41,6 @@ const FIRST_LINE_INDENT_OPTIONS: { key: ReaderFirstLineIndent; label: string }[]
   { key: 'indent', label: 'settings.indent.indent' },
 ];
 
-const FONT_SIZE_SLIDER_THUMB_SIZE = 26;
-
-const FONT_SIZE_SLIDER_THUMB_RADIUS = FONT_SIZE_SLIDER_THUMB_SIZE / 2;
-
 const SPACING_APPLY_DELAY = 300;
 
 interface ReaderSpacingControlProps {
@@ -52,13 +48,8 @@ interface ReaderSpacingControlProps {
 }
 
 const ReaderSpacingControl = ({ readingMode }: ReaderSpacingControlProps): React.JSX.Element => {
-  const sliderRef = useRef<HTMLDivElement>(null);
-  const isDraggingRef = useRef(false);
-  const sliderWidthRef = useRef(0);
   const applyTimerRef = useRef<number | null>(null);
   const pendingApplyRef = useRef<(() => void) | null>(null);
-  const [sliderWidth, setSliderWidth] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
   const [pageGapRatio, setPageGapRatio] = useState<number>(getStoredReaderPageGapRatio);
   const [scrollPaddingX, setScrollPaddingX] = useState<number>(getStoredReaderScrollPaddingX);
 
@@ -80,21 +71,6 @@ const ReaderSpacingControl = ({ readingMode }: ReaderSpacingControlProps): React
     apply?.();
   }, []);
 
-  const setMeasuredSliderWidth = useCallback((width: number) => {
-    const normalized = Math.max(Math.round(width), 0);
-    if (Math.abs(normalized - sliderWidthRef.current) >= 1) {
-      sliderWidthRef.current = normalized;
-      setSliderWidth(normalized);
-    }
-    return sliderWidthRef.current;
-  }, []);
-
-  const updateSliderWidth = useCallback(() => {
-    const slider = sliderRef.current;
-    if (!slider) return sliderWidthRef.current;
-    return setMeasuredSliderWidth(slider.clientWidth);
-  }, [setMeasuredSliderWidth]);
-
   const scheduleApply = useCallback((next: number, paged: boolean) => {
     if (applyTimerRef.current) {
       window.clearTimeout(applyTimerRef.current);
@@ -115,28 +91,6 @@ const ReaderSpacingControl = ({ readingMode }: ReaderSpacingControlProps): React
     }, SPACING_APPLY_DELAY);
   }, []);
 
-  const updateByClientX = useCallback(
-    (clientX: number) => {
-      const slider = sliderRef.current;
-      if (!slider) return;
-      const rect = slider.getBoundingClientRect();
-      const width = setMeasuredSliderWidth(slider.clientWidth);
-      const activeWidth = Math.max(width - FONT_SIZE_SLIDER_THUMB_SIZE, 1);
-      const scale = width > 0 && rect.width > 0 ? rect.width / width : 1;
-      const localClientX = (clientX - rect.left) / scale;
-      const ratio = Math.min(Math.max((localClientX - FONT_SIZE_SLIDER_THUMB_RADIUS) / activeWidth, 0), 1);
-      const raw = min + ratio * (max - min);
-      const next = isPaged ? raw : Math.round(raw);
-      if (isPaged) {
-        setPageGapRatio(next);
-      } else {
-        setScrollPaddingX(next);
-      }
-      scheduleApply(next, isPaged);
-    },
-    [isPaged, max, min, scheduleApply, setMeasuredSliderWidth],
-  );
-
   useEffect(() => {
     flushPendingApply();
     setPageGapRatio(getStoredReaderPageGapRatio());
@@ -149,101 +103,42 @@ const ReaderSpacingControl = ({ readingMode }: ReaderSpacingControlProps): React
     };
   }, [flushPendingApply]);
 
-  useEffect(() => {
-    const sliderElement = sliderRef.current;
-    if (!sliderElement) return;
-
-    const onPointerMove = (e: PointerEvent) => {
-      if (!isDraggingRef.current) return;
-      updateByClientX(e.clientX);
-    };
-    const onPointerUp = () => {
-      isDraggingRef.current = false;
-      setIsDragging(false);
-      document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', onPointerUp);
-      document.removeEventListener('pointercancel', onPointerUp);
-    };
-    const onPointerDown = (e: PointerEvent) => {
-      e.preventDefault();
-      isDraggingRef.current = true;
-      setIsDragging(true);
-      updateByClientX(e.clientX);
-      document.addEventListener('pointermove', onPointerMove);
-      document.addEventListener('pointerup', onPointerUp);
-      document.addEventListener('pointercancel', onPointerUp);
-    };
-
-    sliderElement.addEventListener('pointerdown', onPointerDown);
-    return () => {
-      sliderElement.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('pointermove', onPointerMove);
-      document.removeEventListener('pointerup', onPointerUp);
-      document.removeEventListener('pointercancel', onPointerUp);
-    };
-  }, [updateByClientX]);
-
-  useEffect(() => {
-    const sliderElement = sliderRef.current;
-    if (!sliderElement) return;
-
-    const updateWidth = () => {
-      updateSliderWidth();
-    };
-
-    const intervalId = window.setInterval(() => {
-      if (updateSliderWidth() > 0) {
-        window.clearInterval(intervalId);
-      }
-    }, 120);
-
-    updateWidth();
-    window.addEventListener('resize', updateWidth);
-
-    let observer: ResizeObserver | undefined;
-    if (typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(updateWidth);
-      observer.observe(sliderElement);
-    }
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('resize', updateWidth);
-      observer?.disconnect();
-    };
-  }, [updateSliderWidth]);
-
   const range = max - min;
   const ratio = range > 0 ? Math.min(Math.max((value - min) / range, 0), 1) : 0;
   const defaultRatio = range > 0 ? Math.min(Math.max((defaultValue - min) / range, 0), 1) : 0;
-  const activeWidth = Math.max(sliderWidth - FONT_SIZE_SLIDER_THUMB_SIZE, 0);
-  const thumbX = FONT_SIZE_SLIDER_THUMB_RADIUS + activeWidth * ratio;
-  const progressWidth = Math.min(sliderWidth, thumbX + FONT_SIZE_SLIDER_THUMB_RADIUS + 4);
-  const defaultDotX = FONT_SIZE_SLIDER_THUMB_RADIUS + activeWidth * defaultRatio;
 
   return (
     <div className="reader-setting-section">
       <div className="reader-font-panel-title">{title}</div>
       <div
-        className={`font-panel-content-size-wrapper ${isDragging ? 'is-dragging' : ''}`}
+        className="font-panel-content-size-wrapper"
         style={
           {
-            '--reader-font-size-default-dot-x': `${defaultDotX}px`,
-            '--reader-font-size-progress-width': `${progressWidth || FONT_SIZE_SLIDER_THUMB_SIZE}px`,
-            '--reader-font-size-thumb-x': `${thumbX}px`,
+            '--reader-font-size-default-dot-x': `calc(13px + (100% - 26px) * ${defaultRatio})`,
+            '--reader-font-size-progress-width': `calc(26px + (100% - 26px) * ${ratio})`,
+            '--reader-font-size-thumb-x': `calc(13px + (100% - 26px) * ${ratio})`,
           } as React.CSSProperties
         }
       >
-        <div
-          aria-label={title}
-          aria-valuemax={max}
-          aria-valuemin={min}
-          aria-valuenow={value}
-          className="reader_font_control_slider_wrapper font-panel-content-size-slider"
-          ref={sliderRef}
-          role="slider"
-        >
+        <div className="reader_font_control_slider_wrapper font-panel-content-size-slider">
           <div className="reader_font_control_slider_track">
+            <input
+              type="range"
+              className="reader-control-range"
+              aria-label={title}
+              aria-valuetext={formatLabel(value)}
+              min={min}
+              max={max}
+              step={isPaged ? 0.01 : 1}
+              value={value}
+              onChange={(event) => {
+                const next = event.currentTarget.valueAsNumber;
+                if (isPaged) setPageGapRatio(next);
+                else setScrollPaddingX(next);
+                scheduleApply(next, isPaged);
+              }}
+              onBlur={flushPendingApply}
+            />
             <div className="reader_font_control_slider_track_progress"></div>
             <div className="reader_font_control_slider_default_dot"></div>
             <div className="reader_font_control_slider_dot">

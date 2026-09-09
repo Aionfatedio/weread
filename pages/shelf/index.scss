@@ -33,7 +33,7 @@
 
 .shelf-navbar-border {
   height: 72px;
-  border: solid var(--border-color-1);
+  border: solid #eef0f4;
   border-width: 0 0 1px;
   border-radius: 0;
 }
@@ -46,11 +46,22 @@
   align-items: center;
 }
 
+.shelf-brand {
+  position: relative;
+  flex: 0 0 118px;
+}
+
+.shelf-brand img {
+  display: block;
+  width: 118px;
+  height: auto;
+}
+
 .shelf-search {
   position: relative;
   flex: 1;
-  margin: 0 60px 0 200px;
-  max-width: 720px;
+  min-width: 0;
+  margin: 0 72px 0 76px;
 }
 
 .shelf-search-icon {
@@ -81,7 +92,6 @@
 }
 
 .shelf-navbar-link {
-  margin-left: 12px;
   color: var(--text-color-1);
   font-size: 16px;
   font-weight: 500;
@@ -140,15 +150,7 @@
 .shelf-page-header h1 {
   margin: 0;
   color: var(--text-color-1);
-  font-family:
-    'SourceHanSerifCN-Bold',
-    PingFang SC,
-    -apple-system,
-    SF UI Text,
-    Lucida Grande,
-    STheiti,
-    Microsoft YaHei,
-    sans-serif;
+  font-family: 'Songti SC', SimSun, serif;
   font-size: 20px;
   font-weight: 700;
   line-height: 30px;
@@ -160,26 +162,21 @@
   align-items: center;
   justify-content: flex-end;
   width: 80px;
-  height: 32px;
-  overflow: hidden;
-  transition: width 0.3s ease-in-out;
+  height: 30px;
   flex-shrink: 0;
-}
-
-.shelf-status-filter.is-expanded {
-  width: 290px;
 }
 
 .shelf-status-filter-options {
   position: absolute;
   right: 0;
-  height: 100%;
+  top: calc(100% + 8px);
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 0 4px;
+  padding: 6px;
   border: 1px solid var(--shelf-filter-border);
-  border-radius: 999px;
+  border-radius: 12px;
   background: var(--shelf-filter-bg);
   box-shadow: var(--shelf-filter-shadow);
   opacity: 0;
@@ -193,8 +190,8 @@
 }
 
 .shelf-status-filter-option {
-  height: 24px;
-  padding: 0 12px;
+  height: 28px;
+  padding: 0 10px;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -202,7 +199,7 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 500;
-  line-height: 24px;
+  line-height: 28px;
   white-space: nowrap;
   transition:
     background-color 0.18s ease,
@@ -256,30 +253,20 @@
   color: var(--shelf-filter-text-hover);
 }
 
-.shelf-status-filter.is-expanded .shelf-status-filter-trigger {
-  opacity: 0;
-  pointer-events: none;
-  transform: scale(0.9);
-}
-
 .shelf-list {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  justify-content: flex-start;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 128px);
+  gap: 44px 36px;
   margin-top: 40px;
-  margin-left: -36px;
 }
 
 .shelf-book-item {
   content-visibility: auto;
-  contain-intrinsic-size: 128px 250px;
+  contain-intrinsic-size: 128px 236px;
   position: relative;
   display: block;
   width: 128px;
-  height: auto;
-  margin-left: 36px;
-  margin-bottom: 44px;
+  height: 236px;
   color: var(--text-color-1);
   cursor: pointer;
   text-decoration: none;
@@ -288,19 +275,12 @@
 .shelf-book-cover {
   display: block;
   width: 128px;
-  height: 174px;
-  border-radius: 2px 6px 6px 2px;
-  box-shadow:
-    0 4px 14px rgba(0, 0, 0, 0.14),
-    0 1px 3px rgba(0, 0, 0, 0.08);
+  height: 186px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.05);
   position: relative;
   overflow: hidden;
-  transition:
-    transform 0.22s ease,
-    box-shadow 0.22s ease;
 }
 
-/* Spine highlight, same treatment as the home cards. */
 .shelf-book-cover::after {
   content: '';
   position: absolute;
@@ -310,11 +290,8 @@
   pointer-events: none;
 }
 
-.shelf-book-item:hover .shelf-book-cover {
-  transform: translateY(-4px);
-  box-shadow:
-    0 14px 28px rgba(0, 0, 0, 0.18),
-    0 2px 6px rgba(0, 0, 0, 0.1);
+.shelf-book-item:hover .shelf-book-title {
+  color: var(--text-color-1);
 }
 
 .shelf-book-cover img,
@@ -341,25 +318,16 @@
   -webkit-box-orient: vertical;
   -webkit-text-size-adjust: none;
   box-orient: vertical;
-  height: auto;
-  max-height: 36px;
-}
-
-.shelf-book-progress {
-  margin-top: 6px;
-  color: var(--text-color-3);
-  font-size: 12px;
-  line-height: 16px;
+  height: 36px;
 }
 
 .shelf-import-book {
   content-visibility: auto;
   width: 128px;
-  height: 174px;
-  border-radius: 6px;
-  border: 1.5px dashed var(--border-color-1);
-  margin-left: 36px;
-  margin-bottom: 44px;
+  height: 186px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px dashed var(--border-color-1);
   background: var(--front-bg-color-3);
   color: var(--icon-color-2);
   cursor: pointer;
@@ -368,14 +336,12 @@
   justify-content: center;
   transition:
     border-color 0.2s ease,
-    color 0.2s ease,
-    transform 0.22s ease;
+    color 0.2s ease;
 }
 
 .shelf-import-book:hover {
   border-color: var(--brand-blue-color-1);
   color: var(--brand-blue-color-1);
-  transform: translateY(-4px);
 }
 
 .shelf-loading {
@@ -427,20 +393,17 @@
     0 1px 3px rgba(0, 0, 0, 0.35);
 }
 
-:root[theme='dark'] .shelf-book-item:hover .shelf-book-cover {
-  box-shadow:
-    0 14px 28px rgba(0, 0, 0, 0.55),
-    0 2px 6px rgba(0, 0, 0, 0.4);
+:root[theme='dark'] .shelf-book-item:hover .shelf-book-title {
+  color: var(--text-color-1);
 }
 
-@media (max-width: 760px) {
+@media (max-width: 768px) {
   .shelf-page {
     --shelf-content-gutter: 20px;
   }
 
-  .shelf-navbar-inner,
-  .shelf-main {
-    width: calc(100% - var(--shelf-content-gutter) * 2);
+  .shelf-brand {
+    display: none;
   }
 
   .shelf-search {
@@ -453,30 +416,31 @@
 
   .shelf-page-header {
     gap: 16px;
-  }
-
-  .shelf-status-filter.is-expanded {
-    width: min(290px, calc(100vw - var(--shelf-content-gutter) * 2));
+    flex-wrap: wrap;
   }
 
   .shelf-list {
-    margin-left: -24px;
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+    gap: 30px 24px;
   }
 
   .shelf-book-item {
-    width: 104px;
-    margin-left: 24px;
-    margin-bottom: 34px;
+    width: 100%;
+    height: auto;
+    contain-intrinsic-size: 104px 226px;
   }
 
   .shelf-book-cover,
   .shelf-import-book {
-    width: 104px;
-    height: 154px;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 104 / 154;
   }
+}
 
+@media (prefers-reduced-motion: reduce) {
+  .shelf-navbar,
   .shelf-import-book {
-    margin-left: 24px;
-    margin-bottom: 34px;
+    transition: none;
   }
 }

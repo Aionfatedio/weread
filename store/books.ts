@@ -1,24 +1,29 @@
-import { db } from '@/store/index';
-import { deleteBookResources, persistBookResources, releaseBookResourceUrls } from '@/lib/bookResources';
+import { db, hydrateReaderData } from '@/store/index';
+import { clearChapterPaginationCache, clearPersistedChapterPageCountCache } from '@/lib/chapterPagination';
+import type { ReaderBookData } from '@/lib/readerBookData';
+import { releaseBookResourceUrls } from '@/lib/bookResources';
 import { BOOKS_INFO_STORE_NAME } from '@/lib/readerStoreNames';
 import { createRandomId, getErrorMessage, sha256Hex } from '@/lib/utils';
 import type { BookResourceRecord } from '@/lib/bookResources';
 import type { IDBResult } from '@/lib/indexedDB';
 import type { ReaderBookDocument, ReaderBookSourceType } from '@/lib/readerDocument';
 
-export interface BookInfo {
+export interface BookSummary {
   id: string;
   title: string;
   author: string;
   image: string;
-  document: ReaderBookDocument;
   sourceType: ReaderBookSourceType;
   fingerprint?: string;
   createTime?: number;
   modifyTime?: number;
 }
 
-export interface SearchResult extends BookInfo {
+export interface BookInfo extends BookSummary {
+  document: ReaderBookDocument;
+}
+
+export interface SearchResult extends BookSummary {
   matchedText: string[];
 }
 
@@ -61,7 +66,7 @@ const successResult = <T>(
 const errorResult = <T>(message: string, fallback?: T): IDBResult<T> => ({
   status: 'error',
   code: 1,
-  data: fallback as T,
+  data: fallback,
   error: true,
   message,
 });
@@ -69,9 +74,7 @@ const errorResult = <T>(message: string, fallback?: T): IDBResult<T> => ({
 let dbWorker: Worker | null = null;
 const pendingWorkerOperations = new Map<string, { resolve: (result: IDBResult<unknown>) => void; timer: number }>();
 
-interface WorkerResponseEnvelope<T> extends IDBResult<T> {
-  operationId: string;
-}
+type WorkerResponseEnvelope<T> = IDBResult<T> & { operationId: string };
 
 const handleWorkerMessage = (event: MessageEvent<WorkerResponseEnvelope<unknown>>): void => {
   const operationId = event.data?.operationId;
@@ -171,10 +174,8 @@ const performWorkerOperation = <T = unknown>(
   });
 };
 
-// The worker strips `document` down to `{ version }` before echoing a stored
-// book back (the full text/chapters stay in IndexedDB); mirror that projection
-// when answering from an already-stored record.
-const toExistingBookResult = (existing: BookInfo): IDBResult<BookInfo> => {
+// List and import responses carry metadata only; full documents stay in IndexedDB.
+const toExistingBookResult = (existing: BookInfo): IDBResult<BookSummary> => {
   const { id, title, author, image, sourceType, fingerprint, createTime, modifyTime } = existing;
   return successResult(
     {
@@ -186,7 +187,6 @@ const toExistingBookResult = (existing: BookInfo): IDBResult<BookInfo> => {
       fingerprint,
       createTime,
       modifyTime,
-      document: { version: 1 } as ReaderBookDocument,
     },
     { reason: BOOK_STORE_RESULT_REASON.BOOK_ALREADY_EXISTS },
   );
@@ -202,7 +202,8 @@ export const addBook = async (data: {
   sourceType: ReaderBookSourceType;
   resources?: BookResourceRecord[];
   overwrite?: boolean;
-}): Promise<IDBResult<BookInfo>> => {
+  readerData?: ReaderBookData;
+}): Promise<IDBResult<BookSummary>> => {
   const {
     id: preferredId,
     fingerprint,
@@ -213,11 +214,12 @@ export const addBook = async (data: {
     sourceType,
     resources = [],
     overwrite = false,
+    readerData,
   } = data;
   const computedFingerprint = fingerprint || (await getBookFingerprint({ author, document, sourceType, title }));
   const id = preferredId || computedFingerprint;
 
-  const existing = await getBookById<BookInfo>(id);
+  const existing = await getBookById(id);
   if (!overwrite && !existing.error && existing.data) {
     return toExistingBookResult(existing.data);
   }
@@ -235,75 +237,51 @@ export const addBook = async (data: {
     modifyTime: now,
   };
 
-  if (overwrite) {
-    releaseBookResourceUrls(id);
-    try {
-      await deleteBookResources(id);
-    } catch (error) {
-      console.error('Failed to delete old book resources:', getErrorMessage(error));
-    }
+  if (overwrite || readerData) {
+    clearChapterPaginationCache(id);
+    clearPersistedChapterPageCountCache(id);
   }
-
-  if (resources.length > 0) {
-    try {
-      await persistBookResources(resources.map((record) => ({ ...record, bookId: id })));
-    } catch (error) {
-      console.error('Failed to persist book resources:', getErrorMessage(error));
-    }
-  }
-
-  const addResult = await performWorkerOperation<BookInfo>(overwrite ? 'put' : 'add', { bookInfo });
+  const addResult = await performWorkerOperation<BookSummary>(overwrite ? 'put' : 'add', {
+    bookInfo,
+    resources,
+    readerData,
+  });
   if (addResult.error) {
-    // Race condition: another import added the same book between our get and add.
-    const conflict = await getBookById<BookInfo>(id);
-    if (!conflict.error && conflict.data) {
-      return toExistingBookResult(conflict.data);
-    }
-    // Genuine failure with no book on record: remove the resources persisted
-    // above so they don't linger as unreachable orphans.
-    if (resources.length > 0) {
-      releaseBookResourceUrls(id);
-      try {
-        await deleteBookResources(id);
-      } catch (error) {
-        console.error('Failed to clean up orphaned book resources:', getErrorMessage(error));
-      }
+    if (!overwrite && addResult.reason === BOOK_STORE_RESULT_REASON.BOOK_ALREADY_EXISTS) {
+      const conflict = await getBookById(id);
+      if (!conflict.error && conflict.data) return toExistingBookResult(conflict.data);
     }
     return addResult;
   }
-  // The worker returns a metadata-only projection on success; relay it.
+  releaseBookResourceUrls(id);
+  if (overwrite || readerData) await hydrateReaderData();
   return addResult;
 };
 
-export const searchBooksByTitle = <T = unknown>(keyword: string): Promise<IDBResult<T[]>> => {
-  return performWorkerOperation<T[]>('search', { keyword, searchType: 'title' });
+export const searchBooksByTitle = (keyword: string): Promise<IDBResult<BookSummary[]>> => {
+  return performWorkerOperation<BookSummary[]>('search', { keyword, searchType: 'title' });
 };
 
-export const searchBooksByAuthor = <T = unknown>(keyword: string): Promise<IDBResult<T[]>> => {
-  return performWorkerOperation<T[]>('search', { keyword, searchType: 'author' });
+export const searchBooksByAuthor = (keyword: string): Promise<IDBResult<BookSummary[]>> => {
+  return performWorkerOperation<BookSummary[]>('search', { keyword, searchType: 'author' });
 };
 
-export const searchBooksByContent = <T = unknown>(keyword: string): Promise<IDBResult<T[]>> => {
-  return performWorkerOperation<T[]>('search', { keyword, searchType: 'content' });
+export const searchBooksByContent = (keyword: string): Promise<IDBResult<SearchResult[]>> => {
+  return performWorkerOperation<SearchResult[]>('search', { keyword, searchType: 'content' });
 };
 
-export const getAllBooks = <T = unknown>(): Promise<IDBResult<T[]>> => {
-  return performWorkerOperation<T[]>('getAll');
+export const getAllBooks = (): Promise<IDBResult<BookSummary[]>> => {
+  return performWorkerOperation<BookSummary[]>('getAll');
 };
 
-export const getBookById = <T = unknown>(id: string): Promise<IDBResult<T>> => {
-  return performWorkerOperation<T>('get', { key: id });
+export const getBookById = (id: string): Promise<IDBResult<BookInfo | undefined>> => {
+  return performWorkerOperation<BookInfo | undefined>('get', { key: id });
 };
 
-export const deleteBookById = async (id: string): Promise<IDBResult<null>> => {
-  const result = await performWorkerOperation<null>('delete', { key: id });
-  if (!result.error) {
-    releaseBookResourceUrls(id);
-    try {
-      await deleteBookResources(id);
-    } catch (error) {
-      console.error('Failed to delete book resources:', getErrorMessage(error));
-    }
-  }
-  return result;
+export const restoreBookUserData = async (bookId: string, readerData: ReaderBookData): Promise<void> => {
+  clearChapterPaginationCache(bookId);
+  clearPersistedChapterPageCountCache(bookId);
+  const restored = await performWorkerOperation<null>('restore', { bookId, readerData });
+  if (restored.error) throw new Error(restored.message);
+  await hydrateReaderData();
 };

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
+import { trackPersistResult } from '@/lib/persistFailureNotice';
 import { READER_BOOK_STATUS_STORE_NAME } from '@/lib/readerStoreNames';
 import { EVENT_NAME, syncHook } from '@/lib/subscribe';
 import { db } from '@/store';
@@ -37,7 +37,7 @@ const persistReaderBookStatus = (record: ReaderBookStatusRecord): void => {
 
 export const hydrateReaderBookStatus = async (): Promise<void> => {
   const result = await db.readByCursor<ReaderBookStatusRecord>({ storeName: READER_BOOK_STATUS_STORE_NAME });
-  if (result.error) return;
+  if (result.error) throw new Error(result.message);
   const nextMap: Record<string, ReaderBookStatusRecord> = {};
   result.data.forEach((record) => {
     if (!record?.bookId || !isReaderBookStatus(record.status)) return;
@@ -76,42 +76,6 @@ export const setReaderBookStatus = (bookId: string | undefined | null, status?: 
   };
   bookStatusMapCache[bookId] = next;
   persistReaderBookStatus(next);
-  emitBookStatusChange();
-};
-
-export const deleteReaderBookStatus = async (bookId: string): Promise<void> => {
-  if (!(bookId in bookStatusMapCache)) return;
-  delete bookStatusMapCache[bookId];
-  emitBookStatusChange();
-  reportPersistResult(await db.delete({ key: bookId, storeName: READER_BOOK_STATUS_STORE_NAME }));
-};
-
-export const restoreReaderBookStatusForBook = async ({
-  bookId,
-  status,
-}: {
-  bookId: string;
-  status?: ReaderBookStatusRecord;
-}): Promise<void> => {
-  if (!status || !isReaderBookStatus(status.status)) {
-    delete bookStatusMapCache[bookId];
-    reportPersistResult(await db.delete({ key: bookId, storeName: READER_BOOK_STATUS_STORE_NAME }));
-    emitBookStatusChange();
-    return;
-  }
-
-  const next: ReaderBookStatusRecord = {
-    bookId,
-    status: status.status,
-    updatedAt: Number.isFinite(status.updatedAt) ? status.updatedAt : Date.now(),
-  };
-  bookStatusMapCache[bookId] = next;
-  reportPersistResult(
-    await db.update<ReaderBookStatusRecord>({
-      data: next,
-      storeName: READER_BOOK_STATUS_STORE_NAME,
-    }),
-  );
   emitBookStatusChange();
 };
 

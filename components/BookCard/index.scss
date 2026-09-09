@@ -1,30 +1,16 @@
-// WeRead-style book cards. `content-visibility: auto` lets the browser skip
-// layout/paint for cards that are off-screen; `contain-intrinsic-size` keeps
-// the scrollbar honest while those cards are skipped, so a large library
-// scrolls smoothly without a JS virtual list.
+// Off-screen covers need no JS virtualization.
 .book-card-item {
   content-visibility: auto;
-  contain-intrinsic-size: 168px 218px;
   display: flex;
   cursor: pointer;
   text-decoration: none;
-  transition:
-    transform 0.22s ease,
-    box-shadow 0.22s ease,
-    background-color 0.22s ease;
 }
 
-// Book-like cover: sharp spine on the left, soft corners on the right, a
-// subtle spine highlight and a grounded shadow.
 .book-card-cover {
   position: relative;
   flex: 0 0 auto;
-  border-radius: 2px 6px 6px 2px;
-  box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.16),
-    0 1px 3px rgba(0, 0, 0, 0.1);
-  background: var(--front-bg-color-2);
   overflow: hidden;
+  background: var(--front-bg-color-2);
 
   img {
     display: block;
@@ -36,30 +22,68 @@
   &::after {
     content: '';
     position: absolute;
-    inset: 0 auto 0 0;
-    width: 3px;
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0));
+    inset: 0;
+    border: 1px solid rgba(0, 0, 0, 0.08);
     pointer-events: none;
   }
 }
 
 .book-cover-fallback {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  --cover-start: #8584ff;
+  --cover-end: #b59aff;
+  position: relative;
   flex: 0 0 auto;
-  border-radius: 6px;
-  background: linear-gradient(135deg, rgba(27, 136, 238, 0.14), rgba(27, 136, 238, 0.03)), var(--front-bg-color-2);
-  color: var(--text-color-2);
+  overflow: hidden;
+  background: linear-gradient(90deg, #e4e4e4, #fff 5%, #f4f4f4 9%, #fff 48%);
 }
 
-// Inside a card cover the fallback fills the fixed-size cover box (the box
-// owns the rounding); standalone usages (search result rows) size it via
-// their own utility classes instead.
+.book-cover-fallback[data-cover-tone='1'] {
+  --cover-start: #329df8;
+  --cover-end: #2ed5df;
+}
+.book-cover-fallback[data-cover-tone='2'] {
+  --cover-start: #ff358a;
+  --cover-end: #ff8c73;
+}
+.book-cover-fallback[data-cover-tone='3'] {
+  --cover-start: #ff6057;
+  --cover-end: #ffa064;
+}
+.book-cover-fallback[data-cover-tone='4'] {
+  --cover-start: #62c971;
+  --cover-end: #68dba7;
+}
+.book-cover-fallback[data-cover-tone='5'] {
+  --cover-start: #ffa118;
+  --cover-end: #ffd52c;
+}
+
+.book-cover-pattern {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 12%;
+  height: 68%;
+  overflow: hidden;
+  background: linear-gradient(125deg, var(--cover-start), var(--cover-end));
+
+  svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  text {
+    fill: #fff;
+    opacity: 0.23;
+    font-family: 'Songti SC', SimSun, serif;
+    font-size: 122px;
+    font-weight: 700;
+  }
+}
+
 .book-card-cover .book-cover-fallback {
   width: 100%;
   height: 100%;
-  border-radius: 0;
 }
 
 .book-card-info {
@@ -81,55 +105,67 @@
 }
 
 .book-card-author {
-  color: var(--text-color-2);
-  font-size: 13px;
+  color: var(--text-color-3);
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .book-card-progress {
-  margin-top: auto;
   color: var(--text-color-3);
   font-size: 12px;
 }
 
-// Desktop: horizontal card — cover left, meta right (WeRead "recent" row).
 .book-card-desktop {
-  width: 264px;
+  contain-intrinsic-size: auto 110px;
+  width: 100%;
+  height: 110px;
   padding: 20px;
-  margin: 20px 24px 0 0;
-  border-radius: 12px;
+  align-items: center;
+  border-radius: 14px;
   background: var(--front-bg-color-3);
-  border: 1px solid var(--border-color-1);
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    background-color 160ms ease;
 
   .book-card-cover {
-    width: 84px;
-    height: 118px;
+    width: 48px;
+    height: 70px;
     margin-right: 16px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
   }
 
   .book-card-info {
-    flex: 1 1 auto;
-    padding: 2px 0;
+    flex: 1;
   }
-
   .book-card-title {
-    font-size: 15px;
+    display: block;
+    font-size: 16px;
+    line-height: 24px;
+    white-space: nowrap;
   }
-
   .book-card-author {
-    margin-top: 6px;
+    margin-top: 4px;
+    line-height: 20px;
   }
-
+  .book-card-progress {
+    display: none;
+  }
   &:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.12);
+    transform: scale(1.05);
+    box-shadow: 0 6px 24px rgba(33, 40, 50, 0.07);
   }
 }
 
-// Mobile: vertical card — cover on top, title/progress below (WeRead grid).
+.book-card-item:focus-visible {
+  outline: 2px solid var(--brand-blue-color-1);
+  outline-offset: 4px;
+}
+
 .book-card-mobile {
+  contain-intrinsic-size: auto 218px;
   width: 96px;
   flex-direction: column;
   margin: 20px 18px 0 0;
@@ -137,35 +173,22 @@
   .book-card-cover {
     width: 96px;
     height: 134px;
+    border-radius: 2px 6px 6px 2px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
   }
-
   .book-card-info {
     padding-top: 8px;
   }
-
   .book-card-title {
     font-size: 13px;
   }
-
   .book-card-author {
     display: none;
   }
-
   .book-card-progress {
     margin-top: 4px;
   }
-
   &:active .book-card-cover {
     transform: scale(0.97);
   }
-}
-
-:root[theme='dark'] .book-card-cover {
-  box-shadow:
-    0 4px 12px rgba(0, 0, 0, 0.45),
-    0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
-:root[theme='dark'] .book-card-desktop:hover {
-  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
 }

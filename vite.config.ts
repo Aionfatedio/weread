@@ -33,8 +33,7 @@ export default defineConfig({
           if (id.includes('scheduler')) return 'vendor-react';
           if (id.includes('flexsearch')) return 'vendor-flexsearch';
           if (id.includes('jschardet')) return 'vendor-jschardet';
-          if (id.includes('ranui') || id.includes('ranuts')) return 'vendor-ranui';
-          return 'vendor';
+          return undefined;
         },
       },
     },

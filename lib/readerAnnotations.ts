@@ -1,6 +1,6 @@
 import { EVENT_NAME, syncHook } from '@/lib/subscribe';
 import { db } from '@/store';
-import { reportPersistResult, trackPersistResult } from '@/lib/persistFailureNotice';
+import { trackPersistResult } from '@/lib/persistFailureNotice';
 import { persistReaderSetting, readCachedReaderSetting } from '@/lib/readerSettingStore';
 import { READER_ANNOTATIONS_STORE_NAME } from '@/lib/readerStoreNames';
 import { clamp, createRandomId } from '@/lib/utils';
@@ -98,7 +98,7 @@ const emitAnnotationChange = (): void => {
 
 export const hydrateReaderAnnotations = async (): Promise<void> => {
   const result = await db.readByCursor<ReaderAnnotation>({ storeName: READER_ANNOTATIONS_STORE_NAME });
-  if (result.error) return;
+  if (result.error) throw new Error(result.message);
   const nextMap: Record<string, ReaderAnnotation[]> = {};
   result.data.forEach((annotation) => {
     if (!annotation?.bookId || !annotation.id) return;
@@ -149,58 +149,6 @@ export const getReaderAnnotations = (bookId?: string | null): ReaderAnnotation[]
 
 export const getReaderAnnotationsByBlock = (bookId: string | undefined, blockId: string): ReaderAnnotation[] => {
   return getReaderAnnotations(bookId).filter((annotation) => annotation.blockId === blockId);
-};
-
-export const deleteReaderAnnotationsForBook = async (bookId: string): Promise<void> => {
-  const map = readAnnotationMap();
-  const list = map[bookId];
-  if (!list) return;
-  delete map[bookId];
-  writeAnnotationMap(map);
-  emitAnnotationChange();
-  const results = await Promise.all(
-    list.map((annotation) => db.delete({ key: annotation.id, storeName: READER_ANNOTATIONS_STORE_NAME })),
-  );
-  results.forEach(reportPersistResult);
-};
-
-export const restoreReaderAnnotationsForBook = async ({
-  annotations,
-  bookId,
-  sourceBookId,
-}: {
-  annotations: ReaderAnnotation[];
-  bookId: string;
-  sourceBookId: string;
-}): Promise<void> => {
-  const map = readAnnotationMap();
-  const previous = map[bookId] || [];
-  const deleteResults = await Promise.all(
-    previous.map((annotation) => db.delete({ key: annotation.id, storeName: READER_ANNOTATIONS_STORE_NAME })),
-  );
-  deleteResults.forEach(reportPersistResult);
-
-  const nextAnnotations = annotations
-    .filter((annotation) => annotation?.id && annotation.bookId === sourceBookId)
-    .map((annotation) => ({
-      ...annotation,
-      bookId,
-      groupId: annotation.groupId && sourceBookId !== bookId ? `${bookId}:${annotation.groupId}` : annotation.groupId,
-      id: sourceBookId === bookId ? annotation.id : `${bookId}:${annotation.id}`,
-    }));
-
-  map[bookId] = nextAnnotations;
-  writeAnnotationMap(map);
-  const updateResults = await Promise.all(
-    nextAnnotations.map((annotation) =>
-      db.update<ReaderAnnotation>({
-        data: annotation,
-        storeName: READER_ANNOTATIONS_STORE_NAME,
-      }),
-    ),
-  );
-  updateResults.forEach(reportPersistResult);
-  emitAnnotationChange();
 };
 
 export const getReaderBookmarkForPage = (

@@ -22,8 +22,6 @@
   "dependencies": {
     "flexsearch": "^0.8.212",
     "jschardet": "^3.1.4",
-    "ranui": "0.1.10-alpha-27",
-    "ranuts": "0.1.0-alpha-23",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "react-router-dom": "^7.10.1"
@@ -31,13 +29,11 @@
   "devDependencies": {
     "@eslint/js": "^9.39.1",
     "@tailwindcss/postcss": "^4.3.0",
-    "@tailwindcss/vite": "^4.3.0",
     "@types/node": "^25.0.0",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@typescript-eslint/parser": "^8.49.0",
     "@vitejs/plugin-react": "^5.1.2",
-    "autoprefixer": "^10.4.22",
     "eslint": "^9.39.1",
     "eslint-plugin-import-x": "^4.16.1",
     "eslint-plugin-n": "^17.23.1",

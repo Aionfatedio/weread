@@ -9,26 +9,22 @@ import {
   syncHook,
 } from '@/lib/subscribe';
 import { findKeywordSentenceMatches } from '@/lib/searchText';
-import type { TextSyntaxTree } from '@/lib/transformText';
+import type { ReaderBlock, TextSyntaxTree } from '@/lib/transformText';
 import type { SearchResult, SearchResultTarget } from '@/components/DetailMenu/types';
 
 const clampSearchResultPage = (page: number, totalPage: number): number => {
   return Math.min(Math.max(page, 0), Math.max(totalPage, 0));
 };
 
-export const getSearchMatchPage = (
-  textSyntaxTree: TextSyntaxTree,
-  blockId: string,
-  matchStart: number,
-  blockLength: number,
-): number => {
-  const block = textSyntaxTree.blocks?.find((item) => item.id === blockId);
+export const getSearchMatchPage = (textSyntaxTree: TextSyntaxTree, block: ReaderBlock, matchStart: number): number => {
+  const blockId = block.id;
+  const blockLength = block.text.length;
   const totalPage = textSyntaxTree.totalPage || 0;
   const startPage = textSyntaxTree.blockIdPage[blockId];
   const endPage = textSyntaxTree.blockIdPageEnd[blockId] ?? startPage;
 
   if (startPage === undefined) {
-    if (!block || textSyntaxTree.rawText.length <= 0 || totalPage <= 0) return 0;
+    if (textSyntaxTree.rawText.length <= 0 || totalPage <= 0) return 0;
     const globalProgress = Math.min(Math.max((block.start + matchStart) / textSyntaxTree.rawText.length, 0), 1);
     return clampSearchResultPage(Math.round(globalProgress * totalPage), totalPage);
   }
@@ -45,13 +41,13 @@ export const buildReaderMenuSearchResults = (
   textSyntaxTree: TextSyntaxTree,
 ): SearchResult[] => {
   const { blocks = [], titleIdTitle } = textSyntaxTree || {};
-  const pageSearchResult: SearchResult[] = [];
+  const resultsByTitleId = new Map<number | undefined, SearchResult>();
 
   for (const item of blocks) {
     if (!item.text.includes(normalizedSearchValue)) continue;
 
     const textList = findKeywordSentenceMatches(item.text, normalizedSearchValue).map((match) => {
-      const page = getSearchMatchPage(textSyntaxTree, item.id, match.start, item.text.length);
+      const page = getSearchMatchPage(textSyntaxTree, item, match.start);
       return {
         blockId: item.id,
         blockLength: item.text.length,
@@ -66,15 +62,15 @@ export const buildReaderMenuSearchResults = (
     const title = item.titleId === undefined ? '' : titleIdTitle[item.titleId] || '';
     // Group by titleId, not title text — different chapters can share a title
     // (e.g. every volume opening with "序").
-    const pageSearchResultItem = pageSearchResult.find((i) => i.titleId === item.titleId);
+    const pageSearchResultItem = resultsByTitleId.get(item.titleId);
     if (pageSearchResultItem) {
       pageSearchResultItem.text.push(...textList);
     } else {
-      pageSearchResult.push({ text: textList, index, title, titleId: item.titleId });
+      resultsByTitleId.set(item.titleId, { text: textList, index, title, titleId: item.titleId });
     }
   }
 
-  return pageSearchResult;
+  return Array.from(resultsByTitleId.values());
 };
 
 export const setReaderMenuSearchHighlight = (keyword: string, searchResult: SearchResult[]): void => {
@@ -94,11 +90,9 @@ export const getSearchResultTarget = (target: EventTarget | null): SearchResultT
   const blockLength = Number(item.dataset.searchResultBlockLength);
 
   if (blockId && Number.isFinite(matchStart) && Number.isFinite(blockLength)) {
-    return {
-      blockId,
-      matchStart,
-      page: getSearchMatchPage(getTextSyntaxTree(), blockId, matchStart, blockLength),
-    };
+    const tree = getTextSyntaxTree();
+    const block = tree.blocks.find((item) => item.id === blockId);
+    if (block) return { blockId, matchStart, page: getSearchMatchPage(tree, block, matchStart) };
   }
 
   return Number.isFinite(fallbackPage) ? { page: fallbackPage } : undefined;

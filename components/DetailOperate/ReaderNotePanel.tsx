@@ -13,34 +13,7 @@ import { showGlobalFallback } from '@/lib/globalFallback';
 import { type ReaderAnnotation, getAnnotationBlock, getReaderAnnotations } from '@/lib/readerAnnotations';
 import { OcticonBookmark, OcticonMarker, OcticonUnderline, OcticonWave, OcticonWriteNote } from '@/components/Octicon';
 import { t } from '@/locales';
-
-const writePanelClipboardText = async (text: string): Promise<boolean> => {
-  if (!text) return false;
-
-  try {
-    const clipboard = window.navigator.clipboard;
-    if (clipboard?.writeText) {
-      await clipboard.writeText(text);
-      return true;
-    }
-  } catch {}
-
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.left = '-9999px';
-  textarea.style.top = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  try {
-    return document.execCommand('copy');
-  } catch {
-    return false;
-  } finally {
-    textarea.remove();
-  }
-};
+import { writeClipboardText } from '@/lib/reader/selectionUtils';
 
 const getAnnotationPanelLabel = (annotation: ReaderAnnotation): string => {
   if (annotation.type === 'note' && annotation.noteText) return annotation.noteText;
@@ -174,7 +147,7 @@ export const ReaderNotePanel = (): React.JSX.Element => {
       });
     });
 
-    void writePanelClipboardText(lines.join('\n')).then((success) => {
+    void writeClipboardText(lines.join('\n')).then((success) => {
       if (!success) return;
       setCopyToastVisible(true);
       if (copyTimerRef.current) {

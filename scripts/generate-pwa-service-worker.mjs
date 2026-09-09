@@ -46,68 +46,49 @@ const buildCacheVersion = async (files) => {
 };
 
 const createServiceWorkerSource = ({ cacheName, files }) => `const CACHE_NAME = ${JSON.stringify(cacheName)};
+const CACHE_PREFIX = ${JSON.stringify(cacheName.slice(0, cacheName.lastIndexOf('-') + 1))};
 const PRECACHE_FILES = ${JSON.stringify(files, null, 2)};
 const APP_SHELL_FILE = 'index.html';
 
 const toScopeUrl = (file) => new URL(file, self.registration.scope).toString();
 
-const getPrecacheUrls = () => ['', ...PRECACHE_FILES].map(toScopeUrl);
-
 self.addEventListener('install', (event) => {
-  // No skipWaiting here: the new worker must WAIT until every page from the
-  // old deployment has closed. Activating early would delete the old cache
-  // (below) while still-open pages hold old JS whose lazy-route chunks only
-  // exist in that cache — their next navigation would 404 into a blank page.
-  // The SKIP_WAITING message remains available for an explicit, user-driven
-  // update flow.
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(getPrecacheUrls())));
+  // One atomic precache per deployment: addAll only completes when every file
+  // downloaded, so a cache is always a complete self-consistent version.
+  // No skipWaiting — activating early would delete the cache under pages that
+  // still run this version's lazy chunks. Updates land on the next launch.
+  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_FILES.map(toScopeUrl))));
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))))
+      .then((keys) => Promise.all(keys
+        .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+        .map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
 });
 
-self.addEventListener('message', (event) => {
-  if (event.data?.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
-});
-
 const getCachedAppShell = async () => {
   const cache = await caches.open(CACHE_NAME);
-  return (await cache.match(toScopeUrl(''))) || (await cache.match(toScopeUrl(APP_SHELL_FILE)));
+  return cache.match(toScopeUrl(APP_SHELL_FILE));
 };
 
 const handleNavigationRequest = async (request) => {
-  // Only refresh the app-shell cache when the user navigates to the actual
-  // shell URL. SPA sub-routes (/reader/xxx, /shelf, ...) return their own
-  // server-rendered HTML — for static hosts that is index.html, but for hosts
-  // that map unknown paths to a 404 / branded error page we'd happily cache
-  // that error page under the scope root and serve it forever offline.
-  const scopeUrl = new URL(self.registration.scope);
-  const scopeRootHref = toScopeUrl('');
-  const shellHref = toScopeUrl(APP_SHELL_FILE);
-  const isAppShellRequest = request.url === scopeRootHref || request.url === shellHref ||
-    new URL(request.url).pathname === scopeUrl.pathname;
   try {
+    // Network-first while online: navigation always serves the latest
+    // deployment. The response is deliberately NOT cached — writing a newer
+    // shell into this version's cache would mix it with the old hashed assets
+    // precached here (the mixed-version bug that 404s offline on lazy chunks).
     const response = await fetch(request);
-    if (response.ok) {
-      if (isAppShellRequest) {
-        const cache = await caches.open(CACHE_NAME);
-        await cache.put(scopeRootHref, response.clone());
-      }
-      return response;
-    }
-
+    if (response.ok) return response;
+    // A 404/branded error page must never become the offline shell.
     return (await getCachedAppShell()) || response;
   } catch {
-    const cachedPage = await caches.match(request);
-    return cachedPage || (await getCachedAppShell());
+    // Offline: serve the precached shell, which matches the precached assets.
+    return (await getCachedAppShell()) || Response.error();
   }
 };
 
@@ -115,12 +96,18 @@ const handleSameOriginRequest = async (request) => {
   const cached = await caches.match(request);
   if (cached) return cached;
 
-  const response = await fetch(request);
-  if (response.ok && response.type === 'basic') {
-    const cache = await caches.open(CACHE_NAME);
-    await cache.put(request, response.clone());
+  try {
+    const response = await fetch(request);
+    if (response.ok && response.type === 'basic') {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch {
+    // Offline and not precached: fail like a plain network error instead of
+    // rejecting respondWith (which surfaced as an uncaught TypeError).
+    return Response.error();
   }
-  return response;
 };
 
 self.addEventListener('fetch', (event) => {

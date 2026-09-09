@@ -1,0 +1,28 @@
+.loading-cubes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: 30px;
+  height: 30px;
+}
+
+.loading-cubes span {
+  background: var(--blue-1);
+  animation: loading-cube 1.3s infinite ease-in-out;
+}
+
+@keyframes loading-cube {
+  0%,
+  70%,
+  100% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-cubes span {
+    animation: none;
+  }
+}

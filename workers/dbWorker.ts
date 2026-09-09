@@ -1,15 +1,19 @@
 import { Index } from 'flexsearch';
-import { BOOKS_INFO_STORE_NAME } from '@/lib/readerStoreNames';
+import { BOOKS_INFO_STORE_NAME, BOOK_RESOURCES_STORE_NAME } from '@/lib/readerStoreNames';
+import {
+  EMPTY_READER_BOOK_DATA,
+  READER_BOOK_DATA_STORES,
+  replaceBookRecords,
+  replaceReaderBookData,
+} from '@/lib/readerBookData';
+import type { ReaderBookData } from '@/lib/readerBookData';
+import type { BookResourceRecord } from '@/lib/bookResources';
 import { findKeywordSentenceMatches } from '@/lib/searchText';
 import { getErrorMessage } from '@/lib/utils';
 
-interface BookRecord {
-  id: string;
-  title: string;
-  author: string;
-  document?: { rawText?: string; version?: number };
-  [key: string]: unknown;
-}
+import type { BookInfo, BookSummary } from '@/store/books';
+
+type BookRecord = BookInfo;
 
 interface SearchPayload {
   keyword: string;
@@ -21,7 +25,7 @@ interface BookSearchHit extends BookRecord {
   matchedText: string[];
 }
 
-type OperationType = 'search' | 'add' | 'put' | 'getAll' | 'get' | 'delete';
+type OperationType = 'search' | 'add' | 'put' | 'getAll' | 'get' | 'restore';
 
 const STORE_NAME = BOOKS_INFO_STORE_NAME;
 
@@ -49,8 +53,8 @@ const postSuccess = <T>(operationId: string, data: T): void => {
   self.postMessage({ status: 'success', code: 0, data, error: false, operationId });
 };
 
-const postError = (operationId: string, message: string, data: unknown = null): void => {
-  self.postMessage({ status: 'error', code: 1, data, error: true, message, operationId });
+const postError = (operationId: string, message: string, data: unknown = null, reason?: string): void => {
+  self.postMessage({ status: 'error', code: 1, data, error: true, message, reason, operationId });
 };
 
 let contentIndex: Index | undefined;
@@ -76,12 +80,6 @@ const indexBookContent = (book: BookRecord): void => {
     contentIndex.add(book.id, rawText);
     contentIndexedIds.add(book.id);
   }
-};
-
-const removeBookFromIndex = (id: string): void => {
-  if (!contentIndex || !contentIndexedIds.has(id)) return;
-  contentIndex.remove(id);
-  contentIndexedIds.delete(id);
 };
 
 const ensureContentIndex = (database: IDBDatabase): Promise<void> => {
@@ -163,14 +161,9 @@ const fetchBooksByIds = (database: IDBDatabase, ids: string[]): Promise<BookReco
 // main thread. The home screen only renders id/title/author/image, so the
 // chapter HTML and rawText (often tens of megabytes for image-heavy EPUBs)
 // would otherwise be cloned across the worker boundary just to be ignored.
-// We keep the document version so isValidBook still accepts the trimmed
-// record on the receiving side if it ever round-trips back.
-const projectBookForList = (book: BookRecord): Record<string, unknown> => {
-  const { document, ...rest } = book;
-  return {
-    ...rest,
-    document: { version: document?.version ?? 1 },
-  };
+const projectBookForList = (book: BookRecord): BookSummary => {
+  const { document: _document, ...summary } = book;
+  return summary;
 };
 
 const runSearch = async (
@@ -211,7 +204,7 @@ const runSearch = async (
 
   const request = store.openCursor();
   const lowerKeyword = trimmedKeyword.toLowerCase();
-  const results: Record<string, unknown>[] = [];
+  const results: BookSummary[] = [];
 
   request.onsuccess = (event) => {
     const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
@@ -246,58 +239,63 @@ const runWrite = (
   bookInfo: BookRecord,
   operationId: string,
   mode: 'add' | 'put',
+  resources: BookResourceRecord[],
+  readerData?: ReaderBookData,
 ): void => {
   const request = mode === 'add' ? store.add(bookInfo) : store.put(bookInfo);
-  let requestSucceeded = false;
-  request.onsuccess = () => {
-    requestSucceeded = true;
-  };
-  request.onerror = () => {
-    postError(operationId, request.error?.message || `${mode} error`);
-  };
+  replaceBookRecords(transaction, BOOK_RESOURCES_STORE_NAME, bookInfo.id, resources);
+  if (mode === 'put' || readerData)
+    replaceReaderBookData(transaction, bookInfo.id, readerData ?? EMPTY_READER_BOOK_DATA);
   transaction.oncomplete = () => {
-    if (!requestSucceeded) return;
-    if (isValidBook(bookInfo)) indexBookContent(bookInfo);
+    try {
+      indexBookContent(bookInfo);
+    } catch (error) {
+      // A derived search index must never turn a committed import into a failure.
+      contentIndex = undefined;
+      contentIndexedIds.clear();
+      contentIndexBuilding = null;
+      console.error('Failed to update content index', error);
+    }
     // Echo back only metadata; the multi-megabyte document is already
     // persisted in IndexedDB and would otherwise cross the worker boundary
     // a second time for no reason.
     postSuccess(operationId, projectBookForList(bookInfo));
   };
   transaction.onabort = () => {
-    if (requestSucceeded) {
-      postError(operationId, transaction.error?.message || `${mode} transaction aborted`);
-    }
-  };
-  transaction.onerror = () => {
-    if (requestSucceeded) {
-      postError(operationId, transaction.error?.message || `${mode} transaction error`);
-    }
+    const duplicate = mode === 'add' && request.error?.name === 'ConstraintError';
+    postError(
+      operationId,
+      transaction.error?.message || `${mode} transaction aborted`,
+      null,
+      duplicate ? 'book-already-exists' : undefined,
+    );
   };
 };
 
-const runDelete = (transaction: IDBTransaction, store: IDBObjectStore, key: string, operationId: string): void => {
-  const request = store.delete(key);
-  let requestSucceeded = false;
+const runRestore = (
+  transaction: IDBTransaction,
+  store: IDBObjectStore,
+  bookId: string,
+  readerData: ReaderBookData,
+  operationId: string,
+): void => {
+  const request = store.get(bookId);
   request.onsuccess = () => {
-    requestSucceeded = true;
-  };
-  request.onerror = () => {
-    postError(operationId, request.error?.message || 'delete error');
+    if (!request.result) {
+      transaction.abort();
+      return;
+    }
+    try {
+      replaceReaderBookData(transaction, bookId, readerData);
+    } catch {
+      transaction.abort();
+    }
   };
   transaction.oncomplete = () => {
-    if (!requestSucceeded) return;
-    removeBookFromIndex(key);
     postSuccess(operationId, null);
   };
   transaction.onabort = () => {
-    if (requestSucceeded) {
-      postError(operationId, transaction.error?.message || 'delete transaction aborted');
-    }
-  };
-  transaction.onerror = () => {
-    if (requestSucceeded) {
-      postError(operationId, transaction.error?.message || 'delete transaction error');
-    }
+    postError(operationId, transaction.error?.message || 'Restore transaction aborted');
   };
 };
 
@@ -306,7 +304,7 @@ const runGetAll = (store: IDBObjectStore, operationId: string): void => {
   // book's multi-megabyte rawText/chapter HTML at once just to strip it out
   // again would spike worker memory proportionally to the whole library.
   const request = store.openCursor();
-  const data: Record<string, unknown>[] = [];
+  const data: BookSummary[] = [];
   request.onsuccess = () => {
     const cursor = request.result;
     if (cursor) {
@@ -402,7 +400,9 @@ const openTransaction = async (
   for (let attempt = 0; attempt < 2; attempt++) {
     const database = await getDatabase(dbName);
     try {
-      const transaction = database.transaction(storeName, mode);
+      const stores =
+        mode === 'readwrite' ? [storeName, BOOK_RESOURCES_STORE_NAME, ...READER_BOOK_DATA_STORES] : [storeName];
+      const transaction = database.transaction(stores, mode);
       const store = transaction.objectStore(storeName);
       return { database, transaction, store };
     } catch (error) {
@@ -419,7 +419,7 @@ const openTransaction = async (
 self.onmessage = async (e: MessageEvent<WorkerInboundMessage>) => {
   const { type, data, dbName, storeName, operationId } = e.data;
   try {
-    const mode: IDBTransactionMode = type === 'add' || type === 'put' || type === 'delete' ? 'readwrite' : 'readonly';
+    const mode: IDBTransactionMode = type === 'add' || type === 'put' || type === 'restore' ? 'readwrite' : 'readonly';
     const { database, transaction, store } = await openTransaction(dbName, storeName, mode);
 
     switch (type) {
@@ -427,14 +427,21 @@ self.onmessage = async (e: MessageEvent<WorkerInboundMessage>) => {
         await runSearch(store, database, data as SearchPayload, operationId);
         break;
       case 'add':
-        runWrite(transaction, store, (data as { bookInfo: BookRecord }).bookInfo, operationId, 'add');
+      case 'put': {
+        const payload = data as { bookInfo: BookRecord; resources: BookResourceRecord[]; readerData?: ReaderBookData };
+        try {
+          runWrite(transaction, store, payload.bookInfo, operationId, type, payload.resources, payload.readerData);
+        } catch (error) {
+          transaction.abort();
+          postError(operationId, getErrorMessage(error));
+        }
         break;
-      case 'put':
-        runWrite(transaction, store, (data as { bookInfo: BookRecord }).bookInfo, operationId, 'put');
+      }
+      case 'restore': {
+        const payload = data as { bookId: string; readerData: ReaderBookData };
+        runRestore(transaction, store, payload.bookId, payload.readerData, operationId);
         break;
-      case 'delete':
-        runDelete(transaction, store, (data as { key: string }).key, operationId);
-        break;
+      }
       case 'getAll':
         runGetAll(store, operationId);
         break;

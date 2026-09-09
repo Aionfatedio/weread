@@ -1,5 +1,3 @@
-import jschardet from 'jschardet';
-
 export type ReaderBlockType = 'heading' | 'image' | 'paragraph';
 
 export type ChapterTitleLevel = 1 | 2;
@@ -93,12 +91,13 @@ export const createEmptyTextSyntaxTree = (): TextSyntaxTree => ({
   rawText: '',
 });
 
-export const checkEncoding = (uint8Array: Uint8Array): string => {
+export const checkEncoding = async (uint8Array: Uint8Array): Promise<string> => {
   const bomEncoding = detectBomEncoding(uint8Array);
   if (bomEncoding) return bomEncoding;
 
   const sampleSize = Math.min(uint8Array.length, ENCODING_SAMPLE_SIZE);
   const sample = uint8Array.subarray(0, sampleSize);
+  const { default: jschardet } = await import('jschardet');
   try {
     const detected = jschardet.detect(bytesToBinaryString(sample));
     if (detected?.encoding && detected.confidence >= ENCODING_MIN_CONFIDENCE) return detected.encoding;
@@ -108,9 +107,9 @@ export const checkEncoding = (uint8Array: Uint8Array): string => {
   return 'utf-8';
 };
 
-export const arrayBufferToString = (arrayBuffer: ArrayBuffer | Uint8Array<ArrayBuffer>): string => {
+export const arrayBufferToString = async (arrayBuffer: ArrayBuffer | Uint8Array<ArrayBuffer>): Promise<string> => {
   const uint8Array = arrayBuffer instanceof Uint8Array ? arrayBuffer : new Uint8Array(arrayBuffer);
-  const encoding = checkEncoding(uint8Array);
+  const encoding = await checkEncoding(uint8Array);
   try {
     return new TextDecoder(encoding).decode(uint8Array);
   } catch {
